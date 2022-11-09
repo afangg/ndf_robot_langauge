@@ -1,9 +1,15 @@
 import numpy as np
 import trimesh
 from scipy.spatial import KDTree
+import time
 import pybullet as p
 import copy
 from ndf_robot.utils import util, trimesh_util
+
+def soft_grasp_close(robot, joint_id2, force=100):
+    p.setJointMotorControl2(robot.arm.robot_id, joint_id2, p.VELOCITY_CONTROL, targetVelocity=-1, force=force)
+    # p.setJointMotorControl2(robot.arm.robot_id, joint_id2, p.VELOCITY_CONTROL, targetVelocity=-1, force=100)
+    time.sleep(0.2)        
 
 def safeRemoveConstraint(cid):
     if cid is not None:
@@ -12,6 +18,41 @@ def safeRemoveConstraint(cid):
 def safeCollisionFilterPair(bodyUniqueIdA, bodyUniqueIdB, linkIndexA, linkIndexB, enableCollision, *args, **kwargs):
     if bodyUniqueIdA is not None and bodyUniqueIdB is not None and linkIndexA is not None and linkIndexB is not None:
         p.setCollisionFilterPair(bodyUniqueIdA=bodyUniqueIdA, bodyUniqueIdB=bodyUniqueIdB, linkIndexA=linkIndexA, linkIndexB=linkIndexB, enableCollision=enableCollision)
+
+def object_is_still_grasped(robot, obj_id, right_pad_id, left_pad_id):
+    obj_finger_right_info = p.getClosestPoints(bodyA=obj_id, bodyB=robot.arm.robot_id, distance=0.002,
+                                            linkIndexA=-1, linkIndexB=right_pad_id)
+    obj_finger_left_info = p.getClosestPoints(bodyA=obj_id, bodyB=robot.arm.robot_id, distance=0.002,
+                                            linkIndexA=-1, linkIndexB=left_pad_id)
+    obj_still_in_grasp = len(obj_finger_left_info) > 0 or len(obj_finger_right_info) > 0
+    return obj_still_in_grasp
+
+def constraint_grasp_close(robot, obj_id):
+    obj_pose_world = p.getBasePositionAndOrientation(obj_id)
+    obj_pose_world = util.list2pose_stamped(list(obj_pose_world[0]) + list(obj_pose_world[1]))
+
+    ee_link_id = robot.arm.ee_link_id
+    ee_pose_world = np.concatenate(robot.arm.get_ee_pose()[:2]).tolist()
+    ee_pose_world = util.list2pose_stamped(ee_pose_world)
+
+    obj_pose_ee = util.convert_reference_frame(
+        pose_source=obj_pose_world,
+        pose_frame_target=ee_pose_world,
+        pose_frame_source=util.unit_pose()
+    )
+    obj_pose_ee_list = util.pose_stamped2list(obj_pose_ee)
+
+    cid = p.createConstraint(
+        parentBodyUniqueId=robot.arm.robot_id,
+        parentLinkIndex=ee_link_id,
+        childBodyUniqueId=obj_id,
+        childLinkIndex=-1,
+        jointType=p.JOINT_FIXED,
+        jointAxis=[0, 0, 0],
+        parentFramePosition=obj_pose_ee_list[:3],
+        childFramePosition=[0, 0, 0],
+        parentFrameOrientation=obj_pose_ee_list[3:])
+    return cid
 
 def process_xq_data(data, shelf=True):
     optimizer_gripper_pts = data['gripper_pts_uniform']
