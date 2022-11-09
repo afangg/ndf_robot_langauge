@@ -5,6 +5,10 @@ import pybullet as p
 import copy
 from ndf_robot.utils import util, trimesh_util
 
+def safeRemoveConstraint(cid):
+    if cid is not None:
+        p.removeConstraint(cid)
+
 def safeCollisionFilterPair(bodyUniqueIdA, bodyUniqueIdB, linkIndexA, linkIndexB, enableCollision, *args, **kwargs):
     if bodyUniqueIdA is not None and bodyUniqueIdB is not None and linkIndexA is not None and linkIndexB is not None:
         p.setCollisionFilterPair(bodyUniqueIdA=bodyUniqueIdA, bodyUniqueIdB=bodyUniqueIdB, linkIndexA=linkIndexA, linkIndexB=linkIndexB, enableCollision=enableCollision)

@@ -19,6 +19,7 @@ from ndf_robot.config.default_obj_cfg import get_obj_cfg_defaults
 from ndf_robot.share.globals import bad_shapenet_mug_ids_list, bad_shapenet_bowls_ids_list, bad_shapenet_bottles_ids_list
 from ndf_robot.utils.new_eval_utils import (
     safeCollisionFilterPair,
+    safeRemoveConstraint,
     process_xq_data,
     process_demo_data,
     post_process_grasp,
@@ -31,11 +32,12 @@ from airobot.utils.common import euler2quat
 
 class Pipeline():
 
-    def __init__(self):
+    def __init__(self, global_dict):
+        self.global_dict = global_dict
         self.cfg = self.get_env_cfgs()
         self.obj_cfgs = self.get_obj_cfgs()
         self.robot = Robot('franka', pb_cfg={'gui': args.pybullet_viz}, arm_cfg={'self_collision': False, 'seed': args.seed})
-        self.iterations = 3
+        self.ik_helper = FrankaIK(gui=False)
         self.random_pos = False
         self.ee_pose = None
 
@@ -131,7 +133,6 @@ class Pipeline():
         for fname in demos:
             print('Loading demo from fname: %s' % fname)
             data = np.load(fname, allow_pickle=True)
-            ee_pose = data['ee_pose_world'].tolist()
             if not gripper_pts:
                 gripper_pts = process_xq_data(data, shelf=self.load_shelf)        
             # do i need handle another case for rack and shelf or does rndf take care of that
@@ -251,20 +252,51 @@ class Pipeline():
         inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
         target_obj_pcd_obs = target_obj_pcd_obs[inliers]
 
-        return target_obj_pcd_obs
+        return target_obj_pcd_obs, obj_pose_world
 
-    def main(self, args, global_dict):
+    def find_correspondence(self, optimizer, target_obj_pcd, obj_pose_world):
+        ee_end_pose, obj_end_pose = None, None
+        if not self.ee_pose:
+            #grasping
+            ee_pose_mats, best_idx = optimizer.optimize_transform_implicit(target_obj_pcd, ee=True)
+            ee_pose = util.pose_stamped2list(util.pose_from_matrix(ee_pose_mats[best_idx]))
+            
+            # grasping requires post processing to find anti-podal point
+            grasp_pt = post_process_grasp(ee_pose, target_obj_pcd, thin_feature=(not args.non_thin_feature), grasp_viz=args.grasp_viz, grasp_dist_thresh=args.grasp_dist_thresh)
+            ee_pose[:3] = grasp_pt
+            pregrasp_offset_tf = get_ee_offset(ee_pose=ee_pose)
+            pre_ee_pose = util.pose_stamped2list(
+            util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=util.list2pose_stamped(pregrasp_offset_tf)))
+            self.ee_pose = pre_ee_pose
+        else:
+            #placement
+            pose_mats, best_idx = optimizer.optimize_transform_implicit(target_obj_pcd, ee=False)
+            relative_pose = util.pose_stamped2list(util.pose_from_matrix(pose_mats[best_idx]))
+            
+            ee_pose = util.transform_pose(pose_source=util.list2pose_stamped(self.ee_pose), pose_transform=util.list2pose_stamped(relative_pose))
+            ee_pose_list = util.pose_stamped2list(ee_pose)
+            obj_start_pose = obj_pose_world
+            obj_end_pose = util.transform_pose(pose_source=obj_start_pose, pose_transform=util.list2pose_stamped(relative_pose))
+            
+            self.obj_pose = obj_end_pose
+        return ee_end_pose, obj_end_pose
+
+    def main(self, args):
         # torch.manual_seed(args.seed)
         random.seed(args.seed)
         np.random.seed(args.seed)
+        iterations = args.iterations
 
-        all_objs_dirs = global_dict['all_objs_dirs']
-        all_demos_dirs = global_dict['all_demos_dirs']
-        query_text =  global_dict['query_text']
+        all_objs_dirs = self.global_dict['all_objs_dirs']
+        all_demos_dirs = self.global_dict['all_demos_dirs']
+        query_text =  self.global_dict['query_text']
+
         if 'shelf' in query_text:
             self.load_shelf = True
+            placement_link_id = 0
         else:
             self.load_shelf = False
+            placement_link_id = None
 
         self.demos = self.choose_demos(query_text)
 
@@ -276,8 +308,7 @@ class Pipeline():
         optimizer, demo_shapenet_ids = self.load_optimizer(model, self.demos)
         test_obj_ids = self.get_test_objs(demo_shapenet_ids, query_text)
 
-
-        for iter in self.iterations:
+        for _ in iterations:
             # load a test object
             obj_file, pos, ori, scale = self.add_object(test_obj_ids)
             obj_id = self.robot.pb_client.load_geom(
@@ -297,25 +328,34 @@ class Pipeline():
             p.changeDynamics(obj_id, -1, linearDamping=5, angularDamping=5)
             time.sleep(1.5)
 
-            target_obj_pcd = self.segment_pcd(obj_id)
+            target_obj_pcd, obj_pose_world = self.segment_pcd(obj_id)
+            ee_end_pose, obj_end_pose = self.find_correspondence(optimizer, target_obj_pcd, obj_pose_world)
 
-            # optimize ee pose
-            ee_pose_mats, best_idx = optimizer.optimize_transform_implicit(target_obj_pcd, ee=True)
-            ee_pose = util.pose_stamped2list(util.pose_from_matrix(ee_pose_mats[best_idx]))
+            if obj_end_pose:
+                # reset object to placement pose to detect placement success
+                obj_end_pose_list = util.pose_stamped2list(obj_end_pose)
+                safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=False)
+                safeCollisionFilterPair(obj_id, self.table_id, -1, placement_link_id, enableCollision=False)
+                self.robot.pb_client.set_step_sim(True)
+                # safeRemoveConstraint(o_cid)
+                self.choose_demosrobot.pb_client.reset_body(obj_id, obj_end_pose_list[:3], obj_end_pose_list[3:])
 
-            if not self.ee_pose:
-                grasp_pt = post_process_grasp(ee_pose, target_obj_pcd, thin_feature=(not args.non_thin_feature), grasp_viz=args.grasp_viz, grasp_dist_thresh=args.grasp_dist_thresh)
-                ee_pose[:3] = grasp_pt
-                pregrasp_offset_tf = get_ee_offset(ee_pose=ee_pose)
-                pre_ee_pose = util.pose_stamped2list(
-                util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=util.list2pose_stamped(pregrasp_offset_tf)))
-            else:
-                
+                time.sleep(1.0)
+                safeCollisionFilterPair(obj_id, self.table_id, -1, placement_link_id, enableCollision=True)
+                self.robot.pb_client.set_step_sim(False)
+                time.sleep(1.0)
 
+                safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
+                self.robot.pb_client.reset_body(obj_id, pos, ori)
+            
+            place_jnt_pos = self.ik_helper.get_feasible_ik(self.ee_pose)
+
+            
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--query_text', type=str, required=True)
     parser.add_argument('--seed', type=int, default=0)
+    parser.add_argument('--iterations', type=int, default=3)
 
     args = parser.parse_args()
     query_text = args.query_text
@@ -332,5 +372,5 @@ if __name__ == "__main__":
         query_text=query_text
     )
 
-    eval = Pipeline()
-    eval.main(args, global_dict)
+    eval = Pipeline(global_dict)
+    eval.main(args)
