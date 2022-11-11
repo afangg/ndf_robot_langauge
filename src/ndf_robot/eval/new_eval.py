@@ -377,13 +377,16 @@ class Pipeline():
                         jnt_pos = self.ik_helper.get_ik(pose)
                         if jnt_pos is None:
                             jnt_pos = self.robot.self.robot.arm.compute_ik(pose[:3], pose[3:]) 
+                jnt_poses[i] = jnt_pos
 
             # ee_plans = []
+            prev_pos = self.robot.arm.get_jpos()
             for jnt_pos in jnt_poses:
-                plan = self.ik_helper.plan_joint_motion(self.robot.arm.get_jpos(), jnt_pos)
+                plan = self.ik_helper.plan_joint_motion(prev_pos, jnt_pos)
                 for jnt in plan:
                     self.robot.arm.set_jpos(jnt, wait=False)
                     time.sleep(0.025)
+                prev_pos = jnt_pos
 
             # # get pose that's straight up
             # offset_pose = util.transform_pose(
@@ -414,24 +417,31 @@ class Pipeline():
                     # turn OFF collisions between object / table and object / rack, and move to pre-place pose
                     safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
                     self.robot.arm.eetool.open()
-                    p.resetBasePositionAndOrientation(obj_id, obj_pos_before_grasp, ori)
-                    soft_grasp_close(self.robot, self.finger_joint_id, force=40)
-                    self.robot.arm.set_jpos(jnt_pos_before_grasp, ignore_physics=True)
-                    cid = constraint_grasp_close(self.robot, obj_id)
+                    # p.resetBasePositionAndOrientation(obj_id, obj_pos_before_grasp, ori)
+                    # soft_grasp_close(self.robot, self.finger_joint_id, force=40)
+                    # self.robot.arm.set_jpos(jnt_pos_before_grasp, ignore_physics=True)
+                    # cid = constraint_grasp_close(self.robot, obj_id)
             
-                # if offset_jnts is not None:
-                #     offset_plan = self.ik_helper.plan_joint_motion(self.robot.arm.get_jpos(), offset_jnts)
+            # observe and record outcome
+            obj_surf_contacts = p.getContactPoints(obj_id, self.table_id, -1, placement_link_id)
+            touching_surf = len(obj_surf_contacts) > 0
+            obj_floor_contacts = p.getContactPoints(obj_id, self.robot.arm.floor_id, -1, -1)
+            touching_floor = len(obj_floor_contacts) > 0
+            place_success = touching_surf and not touching_floor
 
-                #     if offset_plan is not None:
-                #         for jnt in offset_plan:
-                #             self.robot.arm.set_jpos(jnt, wait=False)
-                #             time.sleep(0.04)
-                #         self.robot.arm.set_jpos(offset_plan[-1], wait=True)
+            # if offset_jnts is not None:
+            #     offset_plan = self.ik_helper.plan_joint_motion(self.robot.arm.get_jpos(), offset_jnts)
 
-                # turn OFF collisions between object / table and object / rack, and move to pre-place pose
-                safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=False)
-                safeCollisionFilterPair(obj_id, self.table_id, -1, self.placement_link_id, enableCollision=False)
-                time.sleep(1.0)
+            #     if offset_plan is not None:
+            #         for jnt in offset_plan:
+            #             self.robot.arm.set_jpos(jnt, wait=False)
+            #             time.sleep(0.04)
+            #         self.robot.arm.set_jpos(offset_plan[-1], wait=True)
+
+            # # turn OFF collisions between object / table and object / rack, and move to pre-place pose
+            # safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=False)
+            # safeCollisionFilterPair(obj_id, self.table_id, -1, self.placement_link_id, enableCollision=False)
+            # time.sleep(1.0)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
