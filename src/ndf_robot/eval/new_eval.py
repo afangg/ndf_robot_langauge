@@ -4,7 +4,9 @@ import numpy as np
 # import torch
 import argparse
 import time
-
+import sys
+print(sys.path)
+sys.path.append('/home/afo/repos/ndf_robot_language/src/')
 import pybullet as p
 
 import ndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_network
@@ -16,7 +18,7 @@ from ndf_robot.opt.optimizer import OccNetOptimizer
 from ndf_robot.robot.multicam import MultiCams
 from ndf_robot.config.default_eval_cfg import get_eval_cfg_defaults
 from ndf_robot.config.default_obj_cfg import get_obj_cfg_defaults
-# from ndf_robot.share.globals import bad_shapenet_mug_ids_list, bad_shapenet_bowls_ids_list, bad_shapenet_bottles_ids_list
+from ndf_robot.share.globals import bad_shapenet_mug_ids_list, bad_shapenet_bowls_ids_list, bad_shapenet_bottles_ids_list
 from ndf_robot.utils.new_eval_utils import (
     safeCollisionFilterPair,
     safeRemoveConstraint,
@@ -43,6 +45,16 @@ class Pipeline():
         self.random_pos = False
         self.ee_pose = None
 
+        self.all_objs_dirs = self.global_dict['all_objs_dirs']
+        self.all_demos_dirs = self.global_dict['all_demos_dirs']
+        demo_dic = {}
+        for demo_class in os.listdir(self.all_demos_dirs):
+            print("Demo:", demo_class)
+            class_path = osp.join(self.all_demos_dirs, demo_class)
+            demo_dic = self.get_demo_dict(demo_dic, class_path)
+        print('All demo labels:', demo_dic.keys())
+        self.demo_dic = demo_dic
+
     def get_demo_dict(self, demo_dic, demo_class):
         obj_class = demo_class.split('/')[-1]
         for demo_dir in os.listdir(demo_class):
@@ -54,20 +66,17 @@ class Pipeline():
             for fname in os.listdir(demos_path):
                 if '_demo_' not in fname: continue
                 verb = fname.split('_demo_')[0]
+                # print('file', fname, 'with label', concept+verb)
 
                 if concept+verb not in demo_dic:
                     demo_dic[concept+verb] = []
                 file_path = osp.join(demos_path, fname)
-                demo_dic[concept+verb] = file_path
+                demo_dic[concept+verb].append(file_path)
         return demo_dic
 
     def choose_demos(self, query_text):
-        demo_dic = {}
-        for demo_class in os.listdir(all_demos_dirs):
-            class_path = osp.join(all_demos_dirs, demo_class)
-            demo_dic = self.get_demo_dict(demo_dic, class_path)
-
-        return demo_dic[query_text] if query_text in demo_dic else []
+        # print(self.demo_dic[query_text])
+        return self.demo_dic[query_text] if query_text in self.demo_dic else []
 
     def get_env_cfgs(self):
         # general experiment + environment setup/scene generation configs
@@ -118,15 +127,18 @@ class Pipeline():
         table_ori = euler2quat([0, 0, np.pi / 2])
 
         # this is the URDF that was used in the demos -- make sure we load an identical one
-        tmp_urdf_fname = osp.join(path_util.get_ndf_descriptions(), 'hanging/table/table_rack_tmp.urdf')
-        open(tmp_urdf_fname, 'w').write(self.demos[0]['table_urdf'].item())
+        # tmp_urdf_fname = osp.join(path_util.get_ndf_descriptions(), 'hanging/table/table_rack_tmp.urdf')
+        # open(tmp_urdf_fname, 'w').write(self.demos[0]['table_urdf'].item())
+        tmp_urdf_fname = self.demos[0]['table_urdf'].item()
+        print('Table???', tmp_urdf_fname)
         self.table_id = self.robot.pb_client.load_urdf(tmp_urdf_fname,
                                 self.cfg.TABLE_POS,
                                 table_ori,
                                 scaling=self.cfg.TABLE_SCALING)
         if self.load_shelf:
             self.placement_link_id = 0
-        
+        print("DONE SETTING UP")
+
 
     def load_optimizer(self, model, demos):
         demo_target_info = []
@@ -135,7 +147,7 @@ class Pipeline():
         for fname in demos:
             print('Loading demo from fname: %s' % fname)
             data = np.load(fname, allow_pickle=True)
-            if not gripper_pts:
+            if gripper_pts is None:
                 gripper_pts = process_xq_data(data, shelf=self.load_shelf)        
             # do i need handle another case for rack and shelf or does rndf take care of that
 
@@ -145,6 +157,7 @@ class Pipeline():
 
         optimizer = OccNetOptimizer(model, query_pts=gripper_pts, query_pts_real_shape=gripper_pts)
         optimizer.set_demo_info(demo_target_info)
+        print("OPTIMIZER LOADED")
         return optimizer, demo_shapenet_ids
 
     def get_test_objs(self, demo_objs, query_text):
@@ -166,9 +179,6 @@ class Pipeline():
         shapenet_id_list = [fn.split('_')[0] for fn in os.listdir(shapenet_obj_dir)] if test_obj == 'mug' else os.listdir(shapenet_obj_dir)
         for s_id in shapenet_id_list:
             valid = s_id not in demo_objs and s_id not in avoid_shapenet_ids
-            if args.only_test_ids:
-                valid = valid and (s_id in test_shapenet_ids)
-            
             if valid:
                 # for testing, use the "normalized" object
                 obj_obj_file = osp.join(shapenet_obj_dir, s_id, 'models/model_normalized.obj')
@@ -183,7 +193,7 @@ class Pipeline():
         table_z = self.cfg.TABLE_Z
 
         obj_shapenet_id = random.sample(test_obj_ids.keys(), 1)[0]
-        id_str = 'Shapenet ID: %s' % obj_shapenet_id
+        id_str = 'Loading Shapenet ID: %s' % obj_shapenet_id
         print(id_str)
 
         upright_orientation = common.euler2quat([np.pi/2, 0, 0]).tolist()
@@ -192,10 +202,10 @@ class Pipeline():
     
         scale_high, scale_low = self.cfg.MESH_SCALE_HIGH, self.cfg.MESH_SCALE_LOW
         scale_default = self.cfg.MESH_SCALE_DEFAULT
-        if args.rand_mesh_scale:
-            mesh_scale = [np.random.random() * (scale_high - scale_low) + scale_low] * 3
-        else:
-            mesh_scale=[scale_default] * 3
+        # if args.rand_mesh_scale:
+        #     mesh_scale = [np.random.random() * (scale_high - scale_low) + scale_low] * 3
+        # else:
+        mesh_scale=[scale_default] * 3
 
         if self.random_pos:
             if self.test_obj in ['bowl', 'bottle']:
@@ -276,7 +286,7 @@ class Pipeline():
             ee_end_pose = util.pose_stamped2list(util.pose_from_matrix(ee_pose_mats[best_idx]))
             
             # grasping requires post processing to find anti-podal point
-            grasp_pt = post_process_grasp(ee_pose, target_obj_pcd, thin_feature=(not args.non_thin_feature), grasp_viz=args.grasp_viz, grasp_dist_thresh=args.grasp_dist_thresh)
+            grasp_pt = post_process_grasp(self.ee_pose, target_obj_pcd, thin_feature=(not args.non_thin_feature), grasp_viz=args.grasp_viz, grasp_dist_thresh=args.grasp_dist_thresh)
             ee_end_pose[:3] = grasp_pt
             pregrasp_offset_tf = get_ee_offset(ee_pose=ee_end_pose)
             pre_ee_pose = util.pose_stamped2list(
@@ -302,10 +312,8 @@ class Pipeline():
         np.random.seed(args.seed)
         iterations = args.iterations
 
-        all_objs_dirs = self.global_dict['all_objs_dirs']
-        all_demos_dirs = self.global_dict['all_demos_dirs']
         query_text =  self.global_dict['query_text']
-
+        
         if 'shelf' in query_text:
             self.load_shelf = True
             placement_link_id = 0
@@ -314,7 +322,8 @@ class Pipeline():
             placement_link_id = None
 
         self.demos = self.choose_demos(query_text)
-
+        print('Number of Demos', len(self.demos))
+        print('Examples', self.demos[:5])
         model = vnn_occupancy_network.VNNOccNet(
             latent_dim=256, 
             model_type='pointnet',
@@ -322,13 +331,16 @@ class Pipeline():
             sigmoid=True).cuda()
         optimizer, demo_shapenet_ids = self.load_optimizer(model, self.demos)
         test_obj_ids = self.get_test_objs(demo_shapenet_ids, query_text)
-            
+        print('Number of Objects', len(test_obj_ids))
+
+        self.setup_sim()
+
         self.robot.arm.go_home(ignore_physics=True)
         self.robot.arm.move_ee_xyz([0, 0, 0.2])
         self.robot.arm.eetool.open()
         time.sleep(1.5)
 
-        for _ in iterations:
+        for _ in range(iterations):
             # load a test object
             obj_file, obj_id, pos, ori = self.add_object(test_obj_ids)
 
