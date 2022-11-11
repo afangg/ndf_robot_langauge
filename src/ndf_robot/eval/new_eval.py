@@ -16,7 +16,7 @@ from ndf_robot.opt.optimizer import OccNetOptimizer
 from ndf_robot.robot.multicam import MultiCams
 from ndf_robot.config.default_eval_cfg import get_eval_cfg_defaults
 from ndf_robot.config.default_obj_cfg import get_obj_cfg_defaults
-from ndf_robot.share.globals import bad_shapenet_mug_ids_list, bad_shapenet_bowls_ids_list, bad_shapenet_bottles_ids_list
+# from ndf_robot.share.globals import bad_shapenet_mug_ids_list, bad_shapenet_bowls_ids_list, bad_shapenet_bottles_ids_list
 from ndf_robot.utils.new_eval_utils import (
     safeCollisionFilterPair,
     safeRemoveConstraint,
@@ -448,6 +448,7 @@ if __name__ == "__main__":
     parser.add_argument('--query_text', type=str, required=True)
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--iterations', type=int, default=3)
+    parser.add_argument('--pybullet_viz', action='store_true')
 
     args = parser.parse_args()
     query_text = args.query_text
