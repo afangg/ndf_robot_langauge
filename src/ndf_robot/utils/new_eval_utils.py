@@ -160,3 +160,16 @@ def get_ee_offset(ee_pose):
     dz_vec = np.asarray(ee_pose)[:3] - util.pose_stamped2np(normal_z)[:3]
 
     return dz_vec.tolist() + [0, 0, 0, 1]
+
+def constraint_obj_world(obj_id, pos, ori):
+    o_cid = p.createConstraint(
+        obj_id,
+        -1,
+        -1,
+        -1,
+        p.JOINT_FIXED,
+        [0, 0, 0],
+        [0, 0, 0],
+        pos, childFrameOrientation=ori,
+    )
+    return o_cid
