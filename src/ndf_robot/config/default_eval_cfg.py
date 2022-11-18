@@ -17,7 +17,7 @@ _C.TABLE_SCALING = 0.9
 _C.TABLE_Z = 1.15
 
 # boundaries within which to sample initial object poses
-_C.OBJ_SAMPLE_X_HIGH_LOW = [0.4, 0.5]
+_C.OBJ_SAMPLE_X_HIGH_LOW = [0.6, 0.8]
 _C.OBJ_SAMPLE_Y_HIGH_LOW = [-0.4, 0.4]
 
 # amounts to scale the meshes

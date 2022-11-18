@@ -88,7 +88,8 @@ def process_demo_data(data):
     shapenet_id = data['shapenet_id'].item()
     return target_info, shapenet_id
 
-def post_process_grasp(ee_pose, target_obj_pcd, thin_feature=True, grasp_viz=False, grasp_dist_thresh=0.0025):
+def post_process_grasp(ee_pose, target_obj_pcd, thin_feature=True, grasp_viz=True, grasp_dist_thresh=0.0025):
+    
     grasp_pt = ee_pose[:3]
     rix = np.random.permutation(target_obj_pcd.shape[0])
     target_obj_voxel_down = target_obj_pcd[rix[:int(target_obj_pcd.shape[0]/5)]]
@@ -139,7 +140,30 @@ def post_process_grasp(ee_pose, target_obj_pcd, thin_feature=True, grasp_viz=Fal
                 antipodal_close_pt = a_close_pt
                 min_dist = dist
         detected_pt = copy.deepcopy(grasp_pt)
-        grasp_pt = (antipodal_close_pt + grasp_pt) / 2.0  
+        new_grasp_pt = (antipodal_close_pt + grasp_pt) / 2.0  
+
+    if grasp_viz:
+    # if True:
+        # scene = trimesh_util.trimesh_show(
+        #     [target_obj_pcd_obs[::5], grasp_close_pts, pts_within_ball], show=False)
+        ee_mesh = trimesh.load('../floating/panda_gripper.obj')
+        scene = trimesh_util.trimesh_show(
+            [target_obj_voxel_down, grasp_close_pts, pts_within_ball], show=False)
+
+        scale = 0.1
+        grasp_sph = trimesh.creation.uv_sphere(0.005)
+        grasp_sph.visual.face_colors = np.tile([40, 40, 40, 255], (grasp_sph.faces.shape[0], 1))
+        grasp_sph.apply_translation(grasp_pt)
+
+        new_grasp_sph = trimesh.creation.uv_sphere(0.005)
+        new_grasp_sph.visual.face_colors = np.tile([40, 255, 40, 255], (new_grasp_sph.faces.shape[0], 1))
+        new_grasp_sph.apply_translation(new_grasp_pt)
+        scene.add_geometry([grasp_sph, new_grasp_sph])
+        print('END EFFECTOR POSE:', ee_pose)
+        ee_pose_mat = util.matrix_from_pose(util.list2pose_stamped(ee_pose))
+        scene.add_geometry([ee_mesh], transform=ee_pose_mat)
+        scene.show()
+
     return new_grasp_pt
 
 def get_ee_offset(ee_pose):

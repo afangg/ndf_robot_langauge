@@ -275,21 +275,21 @@ class OccNetOptimizer:
             transform_mat_np = np.matmul(transform_mat_np, rand_query_pts_tf)
             transform_mat_np = np.matmul(shape_mean_trans, transform_mat_np)
 
-            ee_pts_world = util.transform_pcd(self.query_pts_origin_real_shape, transform_mat_np)
+            # ee_pts_world = util.transform_pcd(self.query_pts_origin_real_shape, transform_mat_np)
 
-            all_pts = [ee_pts_world, shape_pts_world_np]
-            opt_fname = 'ee_pose_optimized_%d.html' % j if ee else 'rack_pose_optimized_%d.html' % j
-            plot3d(
-                all_pts, 
-                ['black', 'purple'], 
-                osp.join('visualization', opt_fname), 
-                z_plane=False)
-            self.viz_files.append(osp.join('visualization', opt_fname))
+            # all_pts = [ee_pts_world, shape_pts_world_np]
+            # opt_fname = 'ee_pose_optimized_%d.html' % j if ee else 'rack_pose_optimized_%d.html' % j
+            # plot3d(
+            #     all_pts, 
+            #     ['black', 'purple'], 
+            #     osp.join('visualization', opt_fname), 
+            #     z_plane=False)
+            # self.viz_files.append(osp.join('visualization', opt_fname))
 
             if ee:
                 T_mat = transform_mat_np
             else:
                 T_mat = np.linalg.inv(transform_mat_np)
             tf_list.append(T_mat)
-
+        print('End of optimization')
         return tf_list, best_idx

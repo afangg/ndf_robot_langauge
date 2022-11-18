@@ -8,9 +8,9 @@ import sys
 print(sys.path)
 sys.path.append('/home/afo/repos/ndf_robot_language/src/')
 import pybullet as p
-
+import trimesh
 import ndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_network
-from ndf_robot.utils import util
+from ndf_robot.utils import util, trimesh_util
 from ndf_robot.utils import path_util
 
 from ndf_robot.utils.franka_ik import FrankaIK
@@ -18,7 +18,7 @@ from ndf_robot.opt.optimizer import OccNetOptimizer
 from ndf_robot.robot.multicam import MultiCams
 from ndf_robot.config.default_eval_cfg import get_eval_cfg_defaults
 from ndf_robot.config.default_obj_cfg import get_obj_cfg_defaults
-# from ndf_robot.share.globals import bad_shapenet_mug_ids_list, bad_shapenet_bowls_ids_list, bad_shapenet_bottles_ids_list
+from ndf_robot.share.globals import bad_shapenet_mug_ids_list, bad_shapenet_bowls_ids_list, bad_shapenet_bottles_ids_list
 from ndf_robot.utils.new_eval_utils import (
     safeCollisionFilterPair,
     safeRemoveConstraint,
@@ -168,15 +168,15 @@ class Pipeline():
         #either replace with random objects (manipulation can fail) or label object in demo
         obj_classes = ['bottle', 'mug', 'bowl']
         test_obj = [obj for obj in obj_classes if obj in query_text][0]
-        # if test_obj == 'mug':
-        #     avoid_shapenet_ids = bad_shapenet_mug_ids_list + self.cfg.MUG.AVOID_SHAPENET_IDS
-        # elif test_obj == 'bowl':
-        #     avoid_shapenet_ids = bad_shapenet_bowls_ids_list + self.cfg.BOWL.AVOID_SHAPENET_IDS
-        # elif test_obj == 'bottle':
-        #     avoid_shapenet_ids = bad_shapenet_bottles_ids_list + self.cfg.BOTTLE.AVOID_SHAPENET_IDS 
-        # else:
-        #     test_shapenet_ids = []
         avoid_shapenet_ids = []
+        if test_obj == 'mug':
+            avoid_shapenet_ids = bad_shapenet_mug_ids_list + self.cfg.MUG.AVOID_SHAPENET_IDS
+        elif test_obj == 'bowl':
+            avoid_shapenet_ids = bad_shapenet_bowls_ids_list + self.cfg.BOWL.AVOID_SHAPENET_IDS
+        elif test_obj == 'bottle':
+            avoid_shapenet_ids = bad_shapenet_bottles_ids_list + self.cfg.BOTTLE.AVOID_SHAPENET_IDS 
+        else:
+            test_shapenet_ids = []
         # get objects that we can use for testing
         test_object_ids = {}
         shapenet_obj_dir = osp.join(path_util.get_ndf_obj_descriptions(), test_obj + '_centered_obj_normalized')
@@ -195,6 +195,7 @@ class Pipeline():
         x_low, x_high = self.cfg.OBJ_SAMPLE_X_HIGH_LOW
         y_low, y_high = self.cfg.OBJ_SAMPLE_Y_HIGH_LOW
         table_z = self.cfg.TABLE_Z
+        print(x_low, '< x <', x_high)
 
         obj_shapenet_id = random.sample(test_obj_ids.keys(), 1)[0]
         id_str = 'Loading Shapenet ID: %s' % obj_shapenet_id
@@ -234,7 +235,7 @@ class Pipeline():
             rand_yaw_T = util.rand_body_yaw_transform(pos, min_theta=-np.pi, max_theta=np.pi)
             pose_w_yaw = util.transform_pose(pose, util.pose_from_matrix(rand_yaw_T))
             pos, ori = util.pose_stamped2list(pose_w_yaw)[:3], util.pose_stamped2list(pose_w_yaw)[3:]
-
+        pos[0] = 0.65
         # convert mesh with vhacd
         if not osp.exists(obj_file_dec):
             p.vhacd(
@@ -268,6 +269,7 @@ class Pipeline():
         self.robot.pb_client.set_step_sim(False)
         safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
         p.changeDynamics(obj_id, -1, linearDamping=5, angularDamping=5)
+        print('Spawned object at ', pos, ori)
         return obj_id, pos, ori
 
     def segment_pcd(self, obj_id):
@@ -309,11 +311,12 @@ class Pipeline():
         ee_poses, obj_end_pose = [], None
         if self.ee_pose is None:
             #grasping
+            print('Solve for pre-grasp coorespondance')
             ee_pose_mats, best_idx = optimizer.optimize_transform_implicit(target_obj_pcd, ee=True)
             ee_end_pose = util.pose_stamped2list(util.pose_from_matrix(ee_pose_mats[best_idx]))
             
             # grasping requires post processing to find anti-podal point
-            grasp_pt = post_process_grasp(ee_end_pose, target_obj_pcd, thin_feature=True, grasp_viz=False, grasp_dist_thresh=0.0025)
+            grasp_pt = post_process_grasp(ee_end_pose, target_obj_pcd, thin_feature=True, grasp_viz=True, grasp_dist_thresh=0.0025)
             ee_end_pose[:3] = grasp_pt
             pregrasp_offset_tf = get_ee_offset(ee_pose=ee_end_pose)
             pre_ee_pose = util.pose_stamped2list(
@@ -331,6 +334,7 @@ class Pipeline():
             obj_end_pose = util.transform_pose(pose_source=obj_start_pose, pose_transform=util.list2pose_stamped(relative_pose))
             
             ee_poses.append(obj_end_pose)
+        print('Found coorespondence')
         return ee_poses, obj_end_pose
 
     def main(self, args):
@@ -383,10 +387,10 @@ class Pipeline():
                 # safeRemoveConstraint(o_cid)
                 self.robot.pb_client.reset_body(obj_id, obj_end_pose_list[:3], obj_end_pose_list[3:])
 
-                time.sleep(1.0)
+                time.sleep(0.2)
                 safeCollisionFilterPair(obj_id, self.table_id, -1, placement_link_id, enableCollision=True)
                 self.robot.pb_client.set_step_sim(False)
-                time.sleep(1.0)
+                time.sleep(0.2)
 
                 safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
                 self.robot.pb_client.reset_body(obj_id, pos, ori)
@@ -400,8 +404,7 @@ class Pipeline():
             safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
             # safeRemoveConstraint(o_cid)
             p.resetBasePositionAndOrientation(obj_id, pos, ori)
-            print(p.getBasePositionAndOrientation(obj_id))
-            time.sleep(0.5)
+            time.sleep(0.2)
 
             # turn OFF collisions between robot and object / table, and move to pre-grasp pose
             for i in range(p.getNumJoints(self.robot.arm.robot_id)):
@@ -422,25 +425,37 @@ class Pipeline():
     
             for i, pose in enumerate(ee_poses):
                 jnt_pos = jnt_poses[i]
+                print('Attempt to find IK', i)
                 if jnt_pos is None:
-                    jnt_pos = self.ik_helper.get_feasible_ik(pose)
+                    jnt_pos = self.ik_helper.get_feasible_ik(pose, verbose=True)
                     if jnt_pos is None:
                         jnt_pos = self.ik_helper.get_ik(pose)
                         if jnt_pos is None:
-                            jnt_pos = self.robot.arm.compute_ik(pose[:3], pose[3:]) 
+                            jnt_pos = self.robot.arm.compute_ik(pose[:3], pose[3:])
+                if jnt_pos is None:
+                    print('Failed to find IK')
                 jnt_poses[i] = jnt_pos
 
             # ee_plans = []
             prev_pos = self.robot.arm.get_jpos()
             success = True
-            for jnt_pos in jnt_poses:
+            for i, jnt_pos in enumerate(jnt_poses):
+                if jnt_pos is None:
+                    print('No IK for jnt', i)
+                    success = False
+                    break
+                print('finding plan from', i-1, 'to', i)
+                print('pose', i, ':', ee_poses[i])
                 plan = self.ik_helper.plan_joint_motion(prev_pos, jnt_pos)
+                # if plan is None:
+                #     plan = self.ik_helper.plan_joint_motion(prev_pos, jnt_pos)
+
                 if plan is None:
                     print('FAILED TO FIND A PLAN. STOPPING')
                     success = False
                     break
                 for jnt in plan:
-                    self.robot.arm.set_jpos(jnt, wait=False)
+                    self.robot.arm.set_jpos(jnt, wait=True)
                     time.sleep(0.025)
                 prev_pos = jnt_pos
             
@@ -479,7 +494,9 @@ class Pipeline():
                         # soft_grasp_close(self.robot, self.finger_joint_id, force=40)
                         # self.robot.arm.set_jpos(jnt_pos_before_grasp, ignore_physics=True)
                         # cid = constraint_grasp_close(self.robot, obj_id)
-            
+                grasp_success = object_is_still_grasped(self.robot, obj_id, self.right_pad_id, self.left_pad_id) 
+                if grasp_plan:
+                    print("It is grasped")
             # # observe and record outcome
             # obj_surf_contacts = p.getContactPoints(obj_id, self.table_id, -1, placement_link_id)
             # touching_surf = len(obj_surf_contacts) > 0
@@ -502,11 +519,17 @@ class Pipeline():
             time.sleep(1.0)
             while True:
                 x = input("Press 1 to continue or 2 to use a new object")
-                if x == 1:
+                if x == '1':
                     query_text = input('Please enter the new query')
+                    self.ee_pose = self.robot.arm.get_jpos()
                     break
-                elif x == 2:
+                elif x == '2':
                     self.robot.pb_client.remove_body(obj_id)
+                    self.robot.arm.go_home(ignore_physics=True)
+                    self.robot.arm.move_ee_xyz([0, 0, 0.2])
+                    self.robot.arm.eetool.open()
+                    self.ee_pose = None
+                    time.sleep(1.5)
                     break
 
 
@@ -515,8 +538,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--query_text', type=str, required=True)
     parser.add_argument('--seed', type=int, default=0)
-    parser.add_argument('--iterations', type=int, default=3)
+    parser.add_argument('--iterations', type=int, default=5)
     parser.add_argument('--pybullet_viz', action='store_true')
+    parser.add_argument('--weights', type=str, default='multi_category_weights')
 
     args = parser.parse_args()
     query_text = args.query_text
@@ -525,6 +549,8 @@ if __name__ == "__main__":
     all_demos_dirs = osp.join(path_util.get_ndf_data(), 'demos')
 
     vnn_model_path = osp.join(path_util.get_ndf_model_weights(), 'multi_category_weights.pth')
+    # ee_mesh = trimesh.load('../floating/panda_gripper.obj')
+    # ee_mesh.show()
 
     global_dict = dict(
         all_objs_dirs=all_objs_dirs,
