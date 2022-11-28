@@ -26,6 +26,7 @@ from ndf_robot.utils.new_eval_utils import (
     object_is_still_grasped,
     constraint_grasp_close,
     process_xq_data,
+    process_xq_data_rs,
     process_demo_data,
     post_process_grasp,
     get_ee_offset,
@@ -40,6 +41,14 @@ class Pipeline():
 
     def __init__(self, global_dict):
         self.global_dict = global_dict
+        obj_classes = ['bottle', 'mug', 'bowl']
+        self.test_obj = [obj for obj in obj_classes if obj in self.global_dict['query_text']][0]
+        if 'shelf' in query_text:
+            self.load_shelf = True
+        else:
+            self.load_shelf = False
+        print('TEST OBJECT:', self.test_obj)
+
         self.cfg = self.get_env_cfgs()
         self.obj_cfgs = self.get_obj_cfgs()
         self.robot = Robot('franka', pb_cfg={'gui': args.pybullet_viz}, arm_cfg={'self_collision': False, 'seed': args.seed})
@@ -49,55 +58,63 @@ class Pipeline():
 
         self.all_objs_dirs = self.global_dict['all_objs_dirs']
         self.all_demos_dirs = self.global_dict['all_demos_dirs']
+        # demo_dic = {}
+        # for demo_class in os.listdir(self.all_demos_dirs):
+        #     class_path = osp.join(self.all_demos_dirs, demo_class)
+        #     demo_dic = self.get_demo_dict(demo_dic, class_path)
+        # print('All demo labels:', demo_dic.keys())
+        self.demo_dic = self.get_demo_dict()
+        print('All demo labels:', self.demo_dic.keys())
+
+
+    def get_demo_dict(self):
         demo_dic = {}
         for demo_class in os.listdir(self.all_demos_dirs):
-            print("Demo:", demo_class)
             class_path = osp.join(self.all_demos_dirs, demo_class)
-            demo_dic = self.get_demo_dict(demo_dic, class_path)
-        print('All demo labels:', demo_dic.keys())
-        self.demo_dic = demo_dic
-        
+            for demo_dir in os.listdir(class_path):
+                demos_path = osp.join(class_path, demo_dir)
+                concept = demo_class + ' '
+                if 'shelf' in demo_dir:
+                    concept += 'shelf '
 
-    def get_demo_dict(self, demo_dic, demo_class):
-        obj_class = demo_class.split('/')[-1]
-        for demo_dir in os.listdir(demo_class):
-            demos_path = osp.join(demo_class, demo_dir)
-            concept = obj_class + ' '
-            if 'shelf' in demo_dir:
-                concept += 'shelf '
+                for fname in os.listdir(demos_path):
+                    if '_demo_' not in fname: continue
+                    verb = fname.split('_demo_')[0]
+                    # print('file', fname, 'with label', concept+verb)
 
-            for fname in os.listdir(demos_path):
-                if '_demo_' not in fname: continue
-                verb = fname.split('_demo_')[0]
-                # print('file', fname, 'with label', concept+verb)
-
-                if concept+verb not in demo_dic:
-                    demo_dic[concept+verb] = []
-                file_path = osp.join(demos_path, fname)
-                if self.table_model is None:
-                    self.table_model = np.load(file_path, allow_pickle=True)['table_urdf'].item()
-                demo_dic[concept+verb].append(file_path)
+                    if concept+verb not in demo_dic:
+                        demo_dic[concept+verb] = []
+                    file_path = osp.join(demos_path, fname)
+                    if self.table_model is None:
+                        self.table_model = np.load(file_path, allow_pickle=True)['table_urdf'].item()
+                    demo_dic[concept+verb].append(file_path)
         return demo_dic
 
     def choose_demos(self, query_text):
         # print(self.demo_dic[query_text])
+        print('CONCEPT', query_text)
         return self.demo_dic[query_text] if query_text in self.demo_dic else []
 
     def get_env_cfgs(self):
         # general experiment + environment setup/scene generation configs
         cfg = get_eval_cfg_defaults()
-        config_fname = osp.join(path_util.get_ndf_config(), 'eval_cfgs', 'base_config.yaml')
-        cfg.merge_from_file(config_fname)
+        class_cfg = 'eval_'+self.test_obj+'_gen.yaml'
+        config_fname = osp.join(path_util.get_ndf_config(), 'eval_cfgs', class_cfg)
+        if osp.exists(config_fname):
+            cfg.merge_from_file(config_fname)
+            print('Config file loaded')
+        else:
+            print('Config file %s does not exist, using defaults' % config_fname)
         cfg.freeze()
         return cfg
 
     def get_obj_cfgs(self):
         # object specific configs
         obj_cfg = get_obj_cfg_defaults()
-        # change hardcoded bottle
-        obj_config_name = osp.join(path_util.get_ndf_config(), 'bottle_obj_cfg.yaml')
+        obj_config_name = osp.join(path_util.get_ndf_config(), self.test_obj+'_obj_cfg.yaml')
         obj_cfg.merge_from_file(obj_config_name)
         obj_cfg.freeze()
+        print("Set up config settings for", self.test_obj)
 
     def setup_sim(self):
         self.ik_helper = FrankaIK(gui=False)
@@ -123,6 +140,7 @@ class Pipeline():
             roll=0)
 
         self.cams = MultiCams(self.cfg.CAMERA, self.robot.pb_client, n_cams=self.cfg.N_CAMERAS)
+        print('Number of cameras:', len(self.cams.cams))
         cam_info = {}
         cam_info['pose_world'] = []
         for cam in self.cams.cams:
@@ -139,35 +157,39 @@ class Pipeline():
                                 self.cfg.TABLE_POS,
                                 table_ori,
                                 scaling=self.cfg.TABLE_SCALING)
-        if self.load_shelf:
-            self.placement_link_id = 0
+
         print("DONE SETTING UP")
 
 
-    def load_optimizer(self, model, demos):
+    def load_optimizer(self, model, demos, n=None):
+        if n is None:
+            n = len(demos)
+        else:
+            demos[:n]
         demo_target_info = []
         demo_shapenet_ids = []
-        gripper_pts = None
+        gripper_pts, gripper_pts_rs = None, None
         for fname in demos:
             print('Loading demo from fname: %s' % fname)
             data = np.load(fname, allow_pickle=True)
             if gripper_pts is None:
-                gripper_pts = process_xq_data(data, shelf=self.load_shelf)        
+                gripper_pts = process_xq_data(data, shelf=self.load_shelf) 
+            if gripper_pts_rs is None:
+                gripper_pts_rs = process_xq_data_rs(data, shelf=self.load_shelf)               
             # do i need handle another case for rack and shelf or does rndf take care of that
 
             target_info, shapenet_id = process_demo_data(data)
             demo_target_info.append(target_info)
             demo_shapenet_ids.append(shapenet_id)
 
-        optimizer = OccNetOptimizer(model, query_pts=gripper_pts, query_pts_real_shape=gripper_pts)
+        optimizer = OccNetOptimizer(model, query_pts=gripper_pts, query_pts_real_shape=gripper_pts_rs, opt_iterations=500)
         optimizer.set_demo_info(demo_target_info)
         print("OPTIMIZER LOADED")
         return optimizer, demo_shapenet_ids
 
-    def get_test_objs(self, demo_objs, query_text):
+    def get_test_objs(self, demo_objs):
         #either replace with random objects (manipulation can fail) or label object in demo
-        obj_classes = ['bottle', 'mug', 'bowl']
-        test_obj = [obj for obj in obj_classes if obj in query_text][0]
+        test_obj = self.test_obj
         avoid_shapenet_ids = []
         if test_obj == 'mug':
             avoid_shapenet_ids = bad_shapenet_mug_ids_list + self.cfg.MUG.AVOID_SHAPENET_IDS
@@ -195,9 +217,22 @@ class Pipeline():
         x_low, x_high = self.cfg.OBJ_SAMPLE_X_HIGH_LOW
         y_low, y_high = self.cfg.OBJ_SAMPLE_Y_HIGH_LOW
         table_z = self.cfg.TABLE_Z
-        print(x_low, '< x <', x_high)
+
+        if self.test_obj == 'mug':
+            rack_link_id = 0
+            shelf_link_id = 1
+        elif self.test_obj in ['bowl', 'bottle']:
+            rack_link_id = None
+            shelf_link_id = 0
+
+        if self.cfg.DEMOS.PLACEMENT_SURFACE == 'shelf':
+            self.placement_link_id = shelf_link_id
+        else:
+            self.placement_link_id = rack_link_id 
+
 
         obj_shapenet_id = random.sample(test_obj_ids.keys(), 1)[0]
+        obj_shapenet_id = 'bed29baf625ce9145b68309557f3a78c'
         id_str = 'Loading Shapenet ID: %s' % obj_shapenet_id
         print(id_str)
 
@@ -235,7 +270,11 @@ class Pipeline():
             rand_yaw_T = util.rand_body_yaw_transform(pos, min_theta=-np.pi, max_theta=np.pi)
             pose_w_yaw = util.transform_pose(pose, util.pose_from_matrix(rand_yaw_T))
             pos, ori = util.pose_stamped2list(pose_w_yaw)[:3], util.pose_stamped2list(pose_w_yaw)[3:]
-        pos[0] = 0.65
+
+
+        pos = [0.48457163524783603, -0.11043727647139501, 1.15]
+        ori = [0.4744655308273358, 0.5242923421686935, 0.5242923421686936, 0.4744655308273359]
+
         # convert mesh with vhacd
         if not osp.exists(obj_file_dec):
             p.vhacd(
@@ -256,20 +295,23 @@ class Pipeline():
                 convexhullApproximation=1
             )
 
+        # self.robot.pb_client.set_step_sim(True)
         obj_id = self.robot.pb_client.load_geom(
             'mesh',
             mass=0.01,
             mesh_scale=mesh_scale,
-            visualfile=obj_file,
-            collifile=obj_file,
+            visualfile=obj_file_dec,
+            collifile=obj_file_dec,
             base_pos=pos,
             base_ori=ori)
         p.changeDynamics(obj_id, -1, lateralFriction=0.5)
-        self.o_cid = constraint_obj_world(obj_id, pos, ori)
         self.robot.pb_client.set_step_sim(False)
         safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
         p.changeDynamics(obj_id, -1, linearDamping=5, angularDamping=5)
-        print('Spawned object at ', pos, ori)
+        time.sleep(0.5)
+        obj_pose_world = p.getBasePositionAndOrientation(obj_id)
+        print('Spawned object at ', obj_pose_world[0], obj_pose_world[1])
+        self.o_cid = constraint_obj_world(obj_id, obj_pose_world[0], obj_pose_world[1])
         return obj_id, pos, ori
 
     def segment_pcd(self, obj_id):
@@ -294,6 +336,8 @@ class Pipeline():
             
             obj_pts = pts_raw[obj_inds[0], :]
             obj_pcd_pts.append(util.crop_pcd(obj_pts))
+            # obj_pcd_pts.append(obj_pts)
+
             table_pts = pts_raw[table_inds[0], :][::int(table_inds[0].shape[0]/500)]
             table_pcd_pts.append(table_pts)
 
@@ -304,7 +348,8 @@ class Pipeline():
         target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
         inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
         target_obj_pcd_obs = target_obj_pcd_obs[inliers]
-
+        trimesh_util.trimesh_show([target_obj_pcd_obs, np.concatenate(obj_pcd_pts, axis=0)])
+        print('PCD MEAN', target_pts_mean)
         return target_obj_pcd_obs, obj_pose_world
 
     def find_correspondence(self, optimizer, target_obj_pcd, obj_pose_world):
@@ -314,7 +359,7 @@ class Pipeline():
             print('Solve for pre-grasp coorespondance')
             ee_pose_mats, best_idx = optimizer.optimize_transform_implicit(target_obj_pcd, ee=True)
             ee_end_pose = util.pose_stamped2list(util.pose_from_matrix(ee_pose_mats[best_idx]))
-            
+            print('BEST POSE MATRIX', ee_end_pose)
             # grasping requires post processing to find anti-podal point
             grasp_pt = post_process_grasp(ee_end_pose, target_obj_pcd, thin_feature=True, grasp_viz=True, grasp_dist_thresh=0.0025)
             ee_end_pose[:3] = grasp_pt
@@ -344,24 +389,17 @@ class Pipeline():
         iterations = args.iterations
 
         query_text =  self.global_dict['query_text']
-        
-        if 'shelf' in query_text:
-            self.load_shelf = True
-            placement_link_id = 0
-        else:
-            self.load_shelf = False
-            placement_link_id = None
-
+ 
         self.demos = self.choose_demos(query_text)
         print('Number of Demos', len(self.demos))
-        print('Examples', self.demos[:5])
+        print('Examples', self.demos)
         model = vnn_occupancy_network.VNNOccNet(
             latent_dim=256, 
             model_type='pointnet',
             return_features=True, 
             sigmoid=True).cuda()
         optimizer, demo_shapenet_ids = self.load_optimizer(model, self.demos)
-        test_obj_ids = self.get_test_objs(demo_shapenet_ids, query_text)
+        test_obj_ids = self.get_test_objs(demo_shapenet_ids)
         print('Number of Objects', len(test_obj_ids))
 
         self.setup_sim()
@@ -382,13 +420,13 @@ class Pipeline():
                 # reset object to placement pose to detect placement success
                 obj_end_pose_list = util.pose_stamped2list(obj_end_pose)
                 safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=False)
-                safeCollisionFilterPair(obj_id, self.table_id, -1, placement_link_id, enableCollision=False)
+                safeCollisionFilterPair(obj_id, self.table_id, -1, self.placement_link_id, enableCollision=False)
                 self.robot.pb_client.set_step_sim(True)
                 # safeRemoveConstraint(o_cid)
                 self.robot.pb_client.reset_body(obj_id, obj_end_pose_list[:3], obj_end_pose_list[3:])
 
                 time.sleep(0.2)
-                safeCollisionFilterPair(obj_id, self.table_id, -1, placement_link_id, enableCollision=True)
+                safeCollisionFilterPair(obj_id, self.table_id, -1, self.placement_link_id, enableCollision=True)
                 self.robot.pb_client.set_step_sim(False)
                 time.sleep(0.2)
 
@@ -548,7 +586,7 @@ if __name__ == "__main__":
     all_objs_dirs = [path for path in path_util.get_ndf_obj_descriptions() if '_centered_obj_normalized' in path] 
     all_demos_dirs = osp.join(path_util.get_ndf_data(), 'demos')
 
-    vnn_model_path = osp.join(path_util.get_ndf_model_weights(), 'multi_category_weights.pth')
+    vnn_model_path = osp.join(path_util.get_ndf_model_weights(), args.weights)
     # ee_mesh = trimesh.load('../floating/panda_gripper.obj')
     # ee_mesh.show()
 

@@ -58,6 +58,10 @@ def process_xq_data(data, shelf=True):
     optimizer_gripper_pts = data['gripper_pts_uniform']
     return optimizer_gripper_pts
 
+def process_xq_data_rs(data, shelf=True):
+    optimizer_gripper_pts_rs = data['gripper_pts']
+    return optimizer_gripper_pts_rs
+
 def process_demo_data(data):
     demo_obj_pts = data['object_pointcloud']  # observed shape point cloud at start
     demo_pts_mean = np.mean(demo_obj_pts, axis=0)
@@ -84,7 +88,7 @@ def process_demo_data(data):
         demo_ee_pose_world=data['ee_pose_world'],
         demo_query_pt_pose=data['gripper_contact_pose'],
         demo_obj_rel_transform=np.eye(4))
-    
+
     shapenet_id = data['shapenet_id'].item()
     return target_info, shapenet_id
 
@@ -125,7 +129,7 @@ def post_process_grasp(ee_pose, target_obj_pcd, thin_feature=True, grasp_viz=Tru
     # local_grasp_normal = np.mean(np.asarray(close_o3d.normals), axis=0)
     local_grasp_normal = util.vec_from_pose(util.list2pose_stamped(ee_pose))[1]
 
-    if not thin_feature:
+    if thin_feature:
         # sample along this direction to find an antipodal point
         search_vec = -1.0 * local_grasp_normal
         search_final_pt = grasp_pt + search_vec
@@ -146,10 +150,9 @@ def post_process_grasp(ee_pose, target_obj_pcd, thin_feature=True, grasp_viz=Tru
     # if True:
         # scene = trimesh_util.trimesh_show(
         #     [target_obj_pcd_obs[::5], grasp_close_pts, pts_within_ball], show=False)
-        ee_mesh = trimesh.load('../floating/panda_gripper.obj')
         scene = trimesh_util.trimesh_show(
             [target_obj_voxel_down, grasp_close_pts, pts_within_ball], show=False)
-
+        print('GRASP PT', grasp_pt)
         scale = 0.1
         grasp_sph = trimesh.creation.uv_sphere(0.005)
         grasp_sph.visual.face_colors = np.tile([40, 40, 40, 255], (grasp_sph.faces.shape[0], 1))
@@ -159,9 +162,17 @@ def post_process_grasp(ee_pose, target_obj_pcd, thin_feature=True, grasp_viz=Tru
         new_grasp_sph.visual.face_colors = np.tile([40, 255, 40, 255], (new_grasp_sph.faces.shape[0], 1))
         new_grasp_sph.apply_translation(new_grasp_pt)
         scene.add_geometry([grasp_sph, new_grasp_sph])
-        print('END EFFECTOR POSE:', ee_pose)
-        ee_pose_mat = util.matrix_from_pose(util.list2pose_stamped(ee_pose))
+
+        ee_pose[:3] = new_grasp_pt
+        pregrasp_offset_tf = get_ee_offset(ee_pose=ee_pose)
+        pre_ee_pose = util.pose_stamped2list(
+            util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=util.list2pose_stamped(pregrasp_offset_tf)))
+
+        ee_pose_mat = util.matrix_from_pose(util.list2pose_stamped(pre_ee_pose))
+        ee_mesh = trimesh.load('../floating/panda_gripper.obj')
         scene.add_geometry([ee_mesh], transform=ee_pose_mat)
+        print('END EFFECTOR POSE:', ee_pose_mat)
+
         scene.show()
 
     return new_grasp_pt
