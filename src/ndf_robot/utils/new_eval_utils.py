@@ -58,7 +58,7 @@ def process_xq_data(data, shelf=True):
     optimizer_gripper_pts = data['gripper_pts_uniform']
     return optimizer_gripper_pts
 
-def process_xq_data_rs(data, shelf=True):
+def process_xq_rs_data(data, shelf=True):
     optimizer_gripper_pts_rs = data['gripper_pts']
     return optimizer_gripper_pts_rs
 
@@ -92,7 +92,7 @@ def process_demo_data(data):
     shapenet_id = data['shapenet_id'].item()
     return target_info, shapenet_id
 
-def post_process_grasp(ee_pose, target_obj_pcd, thin_feature=True, grasp_viz=True, grasp_dist_thresh=0.0025):
+def post_process_grasp_point(ee_pose, target_obj_pcd, thin_feature=True, grasp_viz=True, grasp_dist_thresh=0.0025):
     
     grasp_pt = ee_pose[:3]
     rix = np.random.permutation(target_obj_pcd.shape[0])

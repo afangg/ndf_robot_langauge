@@ -1,7 +1,7 @@
 import os, os.path as osp
 import random
 import numpy as np
-# import torch
+import torch
 import argparse
 import time
 import sys
@@ -26,9 +26,9 @@ from ndf_robot.utils.new_eval_utils import (
     object_is_still_grasped,
     constraint_grasp_close,
     process_xq_data,
-    process_xq_data_rs,
+    process_xq_rs_data,
     process_demo_data,
-    post_process_grasp,
+    post_process_grasp_point,
     get_ee_offset,
     constraint_obj_world
 )
@@ -115,6 +115,7 @@ class Pipeline():
         obj_cfg.merge_from_file(obj_config_name)
         obj_cfg.freeze()
         print("Set up config settings for", self.test_obj)
+        return obj_cfg
 
     def setup_sim(self):
         self.ik_helper = FrankaIK(gui=False)
@@ -173,9 +174,9 @@ class Pipeline():
             print('Loading demo from fname: %s' % fname)
             data = np.load(fname, allow_pickle=True)
             if gripper_pts is None:
-                gripper_pts = process_xq_data(data, shelf=self.load_shelf) 
+                gripper_pts = process_xq_data(data, shelf=self.load_shelf)
             if gripper_pts_rs is None:
-                gripper_pts_rs = process_xq_data_rs(data, shelf=self.load_shelf)               
+                gripper_pts_rs = process_xq_rs_data(data, shelf=self.load_shelf)               
             # do i need handle another case for rack and shelf or does rndf take care of that
 
             target_info, shapenet_id = process_demo_data(data)
@@ -360,7 +361,7 @@ class Pipeline():
             ee_end_pose = util.pose_stamped2list(util.pose_from_matrix(ee_pose_mats[best_idx]))
             print('BEST POSE MATRIX', ee_end_pose)
             # grasping requires post processing to find anti-podal point
-            grasp_pt = post_process_grasp(ee_end_pose, target_obj_pcd, thin_feature=True, grasp_viz=True, grasp_dist_thresh=0.0025)
+            grasp_pt = post_process_grasp_point(ee_end_pose, target_obj_pcd, thin_feature=True, grasp_viz=True, grasp_dist_thresh=0.0025)
             ee_end_pose[:3] = grasp_pt
             pregrasp_offset_tf = get_ee_offset(ee_pose=ee_end_pose)
             pre_ee_pose = util.pose_stamped2list(
@@ -392,11 +393,21 @@ class Pipeline():
         self.demos = self.choose_demos(query_text)
         print('Number of Demos', len(self.demos))
         print('Examples', self.demos)
+
         model = vnn_occupancy_network.VNNOccNet(
             latent_dim=256, 
             model_type='pointnet',
             return_features=True, 
             sigmoid=True).cuda()
+
+        if not args.random:
+            checkpoint_path = global_dict['vnn_checkpoint_path']
+            print('path', checkpoint_path)
+
+            model.load_state_dict(torch.load(checkpoint_path))
+        else:
+            pass
+
         optimizer, demo_shapenet_ids = self.load_optimizer(model, self.demos)
         test_obj_ids = self.get_test_objs(demo_shapenet_ids)
         print('Number of Objects', len(test_obj_ids))
@@ -578,6 +589,7 @@ if __name__ == "__main__":
     parser.add_argument('--iterations', type=int, default=5)
     parser.add_argument('--pybullet_viz', action='store_true')
     parser.add_argument('--weights', type=str, default='multi_category_weights')
+    parser.add_argument('--random', action='store_true', help='utilize random weights')
 
     args = parser.parse_args()
     query_text = args.query_text
@@ -585,7 +597,7 @@ if __name__ == "__main__":
     all_objs_dirs = [path for path in path_util.get_ndf_obj_descriptions() if '_centered_obj_normalized' in path] 
     all_demos_dirs = osp.join(path_util.get_ndf_data(), 'demos')
 
-    vnn_model_path = osp.join(path_util.get_ndf_model_weights(), args.weights)
+    vnn_model_path = osp.join(path_util.get_ndf_model_weights(), args.weights + '.pth')
     # ee_mesh = trimesh.load('../floating/panda_gripper.obj')
     # ee_mesh.show()
 
