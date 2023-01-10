@@ -387,6 +387,7 @@ def post_process_grasp_point(pre_grasp_ee_pose, target_obj_pcd, thin_feature=Tru
         new_grasp_sph = trimesh.creation.uv_sphere(0.005)
         new_grasp_sph.visual.face_colors = np.tile([40, 255, 40, 255], (new_grasp_sph.faces.shape[0], 1))
         new_grasp_sph.apply_translation(new_grasp_pt)
+        print('GRASP PT', grasp_pt)
 
         # detected_sph = trimesh.creation.uv_sphere(0.005)
         # detected_sph.visual.face_colors = np.tile([40, 40, 40, 255], (detected_sph.faces.shape[0], 1))
@@ -417,5 +418,17 @@ def post_process_grasp_point(pre_grasp_ee_pose, target_obj_pcd, thin_feature=Tru
         # pt2_sph.apply_translation(best_pt2.squeeze())
 
         scene.add_geometry([grasp_sph, new_grasp_sph])
+        ee_mesh = trimesh.load('../floating/panda_gripper.obj')
+
+        pre_grasp_ee_pose[:3] = new_grasp_pt
+        pregrasp_offset_tf = get_ee_offset(ee_pose=pre_grasp_ee_pose)
+        pre_pre_grasp_ee_pose = util.pose_stamped2list(
+            util.transform_pose(pose_source=util.list2pose_stamped(pre_grasp_ee_pose), pose_transform=util.list2pose_stamped(pregrasp_offset_tf)))
+
+        ee_pose_mat = util.matrix_from_pose(util.list2pose_stamped(pre_pre_grasp_ee_pose))
+        print('END EFFECTOR POSE:', ee_pose_mat)
+
+        scene.add_geometry([ee_mesh], transform=ee_pose_mat)
         scene.show()
     return new_grasp_pt
+

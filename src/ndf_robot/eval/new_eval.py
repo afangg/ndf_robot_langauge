@@ -232,7 +232,7 @@ class Pipeline():
 
 
         obj_shapenet_id = random.sample(test_obj_ids.keys(), 1)[0]
-        obj_shapenet_id = 'bed29baf625ce9145b68309557f3a78c'
+        # obj_shapenet_id = 'bed29baf625ce9145b68309557f3a78c'
         id_str = 'Loading Shapenet ID: %s' % obj_shapenet_id
         print(id_str)
 
@@ -300,8 +300,8 @@ class Pipeline():
             'mesh',
             mass=0.01,
             mesh_scale=mesh_scale,
-            visualfile=obj_file_dec,
-            collifile=obj_file_dec,
+            visualfile=obj_file,
+            collifile=obj_file,
             base_pos=pos,
             base_ori=ori)
         p.changeDynamics(obj_id, -1, lateralFriction=0.5)
@@ -348,7 +348,6 @@ class Pipeline():
         target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
         inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
         target_obj_pcd_obs = target_obj_pcd_obs[inliers]
-        trimesh_util.trimesh_show([target_obj_pcd_obs, np.concatenate(obj_pcd_pts, axis=0)])
         print('PCD MEAN', target_pts_mean)
         return target_obj_pcd_obs, obj_pose_world
 
