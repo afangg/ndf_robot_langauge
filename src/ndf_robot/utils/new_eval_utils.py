@@ -55,14 +55,48 @@ def constraint_grasp_close(robot, obj_id):
     return cid
 
 def process_xq_data(data, shelf=True):
-    optimizer_gripper_pts = data['gripper_pts_uniform']
-    return optimizer_gripper_pts
+    if 'gripper_pts_uniform' in data:
+        return data['gripper_pts_uniform'], None
+    else:
+        print('shelf', shelf)
+        if shelf:
+            uniform_place_demo_pts = data['shelf_pointcloud_uniform']
+            uniform_place_demo_pose_mat = util.matrix_from_pose(util.list2pose_stamped(data['shelf_pose_world']))
+        else:
+            uniform_place_demo_pts = data['rack_pointcloud_uniform']
+            uniform_place_demo_pose_mat = util.matrix_from_pose(util.list2pose_stamped(data['rack_pose_world']))
+
+        uniform_place_demo_pcd = trimesh.PointCloud(uniform_place_demo_pts)
+        uniform_place_demo_pcd.apply_transform(uniform_place_demo_pose_mat)  # points used to represent the rack in demo pose
+        uniform_place_demo_pts = np.asarray(uniform_place_demo_pcd.vertices)
+        return None, uniform_place_demo_pts
 
 def process_xq_rs_data(data, shelf=True):
-    optimizer_gripper_pts_rs = data['gripper_pts']
-    return optimizer_gripper_pts_rs
+    if 'gripper_pts' in data:
+        return data['gripper_pts'], None
+    else:
+        print('shelf', shelf)
+        if shelf:
+            gt_place_demo_pts = data['shelf_pointcloud_gt']
+            gt_place_demo_pose_mat = util.matrix_from_pose(util.list2pose_stamped(data['shelf_pose_world']))
+        else:
+            gt_place_demo_pts = data['rack_pointcloud_gt']
+            gt_place_demo_pose_mat = util.matrix_from_pose(util.list2pose_stamped(data['rack_pose_world']))
 
-def process_demo_data(data):
+        gt_place_demo_pcd = trimesh.PointCloud(gt_place_demo_pts)
+        gt_place_demo_pcd.apply_transform(gt_place_demo_pose_mat)  # points used to represent the rack in demo pose
+        gt_place_demo_pts = np.asarray(gt_place_demo_pcd.vertices)
+        return None, gt_place_demo_pts
+
+def process_demo_data(data, initial_pose=None):
+    if initial_pose is None:
+        demo_info, initial_pose = grasp_demo(data)
+    else:
+        demo_info = place_demo(data, initial_pose)
+
+    return demo_info, initial_pose
+
+def grasp_demo(data):
     demo_obj_pts = data['object_pointcloud']  # observed shape point cloud at start
     demo_pts_mean = np.mean(demo_obj_pts, axis=0)
     inliers = np.where(np.linalg.norm(demo_obj_pts - demo_pts_mean, 2, 1) < 0.2)[0]
@@ -89,10 +123,66 @@ def process_demo_data(data):
         demo_query_pt_pose=data['gripper_contact_pose'],
         demo_obj_rel_transform=np.eye(4))
 
-    shapenet_id = data['shapenet_id'].item()
-    return target_info, shapenet_id
+    return target_info, data['obj_pose_world']
 
-def post_process_grasp_point(ee_pose, target_obj_pcd, thin_feature=True, grasp_viz=True, grasp_dist_thresh=0.0025):
+def place_demo(place_data, initial_pose):
+    if 'shelf_pointcloud_gt' in place_data:
+        print('Place on shelf')
+        place_pcd_gt = 'shelf_pointcloud_gt'
+        place_world = 'shelf_pose_world'
+        place_pcd_observed = 'shelf_pointcloud_observed'
+        place_pcd_uniform = 'shelf_pointcloud_uniform'
+    else:
+        print('Place on rack')
+        place_pcd_gt = 'rack_pointcloud_gt'
+        place_world = 'rack_pose_world'
+        place_pcd_observed = 'rack_pointcloud_observed'
+        place_pcd_uniform = 'rack_pointcloud_uniform'
+
+    # place_data = np.load(place_demo_fn, allow_pickle=True)
+    place_demo_obj_pts = place_data['object_pointcloud']  # observed shape points at start
+    place_demo_pts_mean = np.mean(place_demo_obj_pts, axis=0)
+    inliers = np.where(np.linalg.norm(place_demo_obj_pts - place_demo_pts_mean, 2, 1) < 0.2)[0]
+    place_demo_obj_pts = place_demo_obj_pts[inliers]
+    place_demo_obj_pts_original = place_demo_obj_pts
+    place_demo_obj_pcd = trimesh.PointCloud(place_demo_obj_pts)
+    pick_demo_obj_pose = initial_pose
+    # pick_demo_obj_pose = obj_pose
+    place_demo_obj_pose = place_data['obj_pose_world']
+    place_demo_obj_pose_rel_mat = util.matrix_from_pose(
+        util.get_transform(
+            util.list2pose_stamped(place_demo_obj_pose), 
+            util.list2pose_stamped(pick_demo_obj_pose)))  # ground truth relative transformation in demo
+    place_demo_obj_pcd.apply_transform(place_demo_obj_pose_rel_mat)  # start shape points transformed into goal configuration
+    place_demo_obj_pts = np.asarray(place_demo_obj_pcd.vertices)  # shape points at goal
+
+    place_demo_shelf_pts_rs = place_data[place_pcd_gt]  # points used to represent the rack in canonical pose
+    place_demo_shelf_pcd_rs = trimesh.PointCloud(place_demo_shelf_pts_rs)
+    place_demo_shelf_pose_mat = util.matrix_from_pose(util.list2pose_stamped(place_data[place_world]))
+    place_demo_shelf_pcd_rs.apply_transform(place_demo_shelf_pose_mat)  # points used to represent the rack in demo pose
+    place_demo_shelf_pts_rs = np.asarray(place_demo_shelf_pcd_rs.vertices)
+
+    place_demo_rack_pts_obs = np.concatenate(place_data[place_pcd_observed], 0)  # points that we observed on the rack
+    rndperm = np.random.permutation(place_demo_rack_pts_obs.shape[0])
+    place_demo_rack_pts_obs = place_demo_rack_pts_obs[rndperm[:int(place_demo_rack_pts_obs.shape[0]/2)]]
+
+    uniform_place_demo_shelf_pts = place_data[place_pcd_uniform]
+    uniform_place_demo_shelf_pcd = trimesh.PointCloud(uniform_place_demo_shelf_pts)
+    uniform_place_demo_shelf_pose_mat = util.matrix_from_pose(util.list2pose_stamped(place_data[place_world]))
+    uniform_place_demo_shelf_pcd.apply_transform(uniform_place_demo_shelf_pose_mat)  # points used to represent the rack in demo pose
+    uniform_place_demo_shelf_pts = np.asarray(uniform_place_demo_shelf_pcd.vertices)
+
+    place_demo_shelf_pts = uniform_place_demo_shelf_pts 
+    rack_target_info = dict(
+        demo_query_pts=place_demo_shelf_pts,
+        demo_query_pts_real_shape=place_demo_shelf_pts_rs,
+        demo_obj_pts=place_demo_obj_pts, 
+        demo_ee_pose_world=place_data['ee_pose_world'],
+        demo_query_pt_pose=place_data['rack_contact_pose'],
+        demo_obj_rel_transform=place_demo_obj_pose_rel_mat)
+    return rack_target_info
+        
+def post_process_grasp_point(ee_pose, target_obj_pcd, thin_feature=True, grasp_viz=False, grasp_dist_thresh=0.0025):
     
     grasp_pt = ee_pose[:3]
     rix = np.random.permutation(target_obj_pcd.shape[0])
