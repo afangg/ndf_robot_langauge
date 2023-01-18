@@ -54,6 +54,10 @@ def constraint_grasp_close(robot, obj_id):
         parentFrameOrientation=obj_pose_ee_list[3:])
     return cid
 
+def constraint_grasp_open(cid=None):
+    if cid is not None:
+        p.removeConstraint(cid)
+
 def process_xq_data(data, shelf=True):
     if 'gripper_pts_uniform' in data:
         return data['gripper_pts_uniform'], None
@@ -88,11 +92,11 @@ def process_xq_rs_data(data, shelf=True):
         gt_place_demo_pts = np.asarray(gt_place_demo_pcd.vertices)
         return None, gt_place_demo_pts
 
-def process_demo_data(data, initial_pose=None):
+def process_demo_data(data, initial_pose=None, shelf=False):
     if initial_pose is None:
         demo_info, initial_pose = grasp_demo(data)
     else:
-        demo_info = place_demo(data, initial_pose)
+        demo_info = place_demo(data, initial_pose, shelf=shelf)
 
     return demo_info, initial_pose
 
@@ -125,8 +129,8 @@ def grasp_demo(data):
 
     return target_info, data['obj_pose_world']
 
-def place_demo(place_data, initial_pose):
-    if 'shelf_pointcloud_gt' in place_data:
+def place_demo(place_data, initial_pose, shelf=True):
+    if shelf:
         print('Place on shelf')
         place_pcd_gt = 'shelf_pointcloud_gt'
         place_world = 'shelf_pose_world'
