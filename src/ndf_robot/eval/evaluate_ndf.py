@@ -15,6 +15,8 @@ from airobot.utils import common
 from airobot import log_info
 from airobot.utils.common import euler2quat
 
+import sys
+sys.path.append('/home/afo/repos/ndf_robot_language/src/')
 import ndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_network
 from ndf_robot.utils import util, trimesh_util
 from ndf_robot.utils.util import np2img
@@ -289,6 +291,7 @@ def main(args, global_dict):
     for iteration in range(args.start_iteration, args.num_iterations):
         # load a test object
         obj_shapenet_id = random.sample(test_object_ids, 1)[0]
+        # obj_shapenet_id = 'bed29baf625ce9145b68309557f3a78cZ'
         id_str = 'Shapenet ID: %s' % obj_shapenet_id
         log_info(id_str)
 

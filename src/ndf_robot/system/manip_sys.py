@@ -17,19 +17,11 @@ def main(pipeline, args):
     # torch.manual_seed(args.seed)
     pipeline.prompt_query()
 
-    optimizer, demo_shapenet_ids = pipeline.load_optimizer(pipeline.model, pipeline.demos)
-
     if pipeline.scene_obj is None:
-        test_obj_ids = pipeline.get_test_objs(demo_shapenet_ids)
-
-        pipeline.setup_sim()
-
-        pipeline.robot.arm.go_home(ignore_physics=True)
-        pipeline.robot.arm.move_ee_xyz([0, 0, 0.2])
-        pipeline.robot.arm.eetool.open()
-        time.sleep(1.5)
+        pipeline.load_table()
 
         # load a test object
+        test_obj_ids = pipeline.get_test_objs()
         obj_id, pos, ori = pipeline.add_object(test_obj_ids)
         target_obj_pcd, obj_pose_world = pipeline.segment_pcd(obj_id)
     else:
@@ -37,21 +29,29 @@ def main(pipeline, args):
         obj_pose_world_list = util.pose_stamped2list(obj_pose_world)
         pos, ori = obj_pose_world_list[:3], obj_pose_world_list[3:]
     print('Object at pose:', util.pose_stamped2list(obj_pose_world))
+    optimizer = pipeline.load_optimizer(pipeline.demos)
 
     ee_poses = pipeline.find_correspondence(optimizer, args, target_obj_pcd, obj_pose_world)
     obj_end_pose_list = ee_poses[-1]
 
     pipeline.pre_execution(obj_id, pos, ori, obj_end_pose_list)
     jnt_poses = pipeline.get_iks(ee_poses)
-    pipeline.motion_plan(jnt_poses, obj_id)
-    pipeline.post_execution(obj_id, pos, ori)
 
-    # # observe and record outcome
-    # obj_surf_contacts = p.getContactPoints(obj_id, self.table_id, -1, placement_link_id)
-    # touching_surf = len(obj_surf_contacts) > 0
-    # obj_floor_contacts = p.getContactPoints(obj_id, self.robot.arm.floor_id, -1, -1)
-    # touching_floor = len(obj_floor_contacts) > 0
-    # place_success = touching_surf and not touching_floor
+    prev_pos = pipeline.robot.arm.get_jpos()
+    for i, jnt_pos in enumerate(jnt_poses):
+        if jnt_pos is None:
+            log_warn('No IK for jnt', i)
+            break
+        
+        plan = pipeline.plan_motion(prev_pos, jnt_pos)
+        if plan is None:
+            log_warn('FAILED TO FIND A PLAN. STOPPING')
+            break
+        pipeline.execute_plan(plan)
+        prev_pos = jnt_pos
+        input('Press enter to continue')
+
+    pipeline.post_execution(obj_id, pos, ori)
 
     time.sleep(1.0)
     current_scene = dict(

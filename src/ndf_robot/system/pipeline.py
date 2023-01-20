@@ -19,7 +19,7 @@ from ndf_robot.robot.multicam import MultiCams
 from ndf_robot.config.default_eval_cfg import get_eval_cfg_defaults
 from ndf_robot.config.default_obj_cfg import get_obj_cfg_defaults
 from ndf_robot.share.globals import bad_shapenet_mug_ids_list, bad_shapenet_bowls_ids_list, bad_shapenet_bottles_ids_list
-from ndf_robot.utils.new_eval_utils import (
+from ndf_robot.utils.pipeline_util import (
     safeCollisionFilterPair,
     safeRemoveConstraint,
     soft_grasp_close,
@@ -41,6 +41,10 @@ from airobot.utils.common import euler2quat
 from sentence_transformers import SentenceTransformer
 from sentence_transformers import util as sentence_util
 
+def show_link(obj_id, link_id, color):
+    if link_id is not None:
+        p.changeVisualShape(obj_id, link_id, rgbaColor=color)
+
 class Pipeline():
 
     def __init__(self, global_dict, args):
@@ -50,12 +54,17 @@ class Pipeline():
         self.all_objs_dirs = global_dict['all_objs_dirs']
         self.all_demos_dirs = global_dict['all_demos_dirs']
 
-        self.robot = Robot('franka', pb_cfg={'gui': args.pybullet_viz}, arm_cfg={'self_collision': False, 'seed': args.seed})
         self.random_pos = False
         self.ee_pose = None
         self.scene_obj = None
         self.table_model = None
 
+        self.cfg = get_eval_cfg_defaults()
+
+    
+        self.load_robot(args)
+        self.load_cams()
+    
         self.demo_dic = self.get_demo_dict()
         print('All demo labels:', self.demo_dic.keys())
 
@@ -72,9 +81,9 @@ class Pipeline():
                 break
             elif x == '2':
                 self.robot.pb_client.remove_body(scene['obj_id'])
-                self.robot.arm.go_home(ignore_physics=True)
-                self.robot.arm.move_ee_xyz([0, 0, 0.2])
-                self.robot.arm.eetool.open()
+                # self.robot.arm.go_home(ignore_physics=True)
+                # self.robot.arm.move_ee_xyz([0, 0, 0.2])
+                # self.robot.arm.eetool.open()
 
                 self.scene_obj = None
                 self.ee_pose = None
@@ -121,7 +130,8 @@ class Pipeline():
         log_info("Set up config settings for %s" % self.test_obj)
         return obj_cfg
 
-    def setup_sim(self):
+    def load_robot(self, args):
+        self.robot = Robot('franka', pb_cfg={'gui': args.pybullet_viz}, arm_cfg={'self_collision': False, 'seed': args.seed})
         self.ik_helper = FrankaIK(gui=False)
         
         self.finger_joint_id = 9
@@ -140,12 +150,17 @@ class Pipeline():
             pitch=-25,
             roll=0)
 
+    def load_cams(self):
         self.cams = MultiCams(self.cfg.CAMERA, self.robot.pb_client, n_cams=self.cfg.N_CAMERAS)
         log_info('Number of cameras: %s' % len(self.cams.cams))
         cam_info = {}
         cam_info['pose_world'] = []
         for cam in self.cams.cams:
             cam_info['pose_world'].append(util.pose_from_matrix(cam.cam_ext_mat))
+
+    def load_table(self):            
+        self.cfg = self.get_env_cfgs()
+        self.obj_cfgs = self.get_obj_cfgs()
 
         # put table at right spot
         table_ori = euler2quat([0, 0, np.pi / 2])
@@ -158,22 +173,23 @@ class Pipeline():
                                 table_ori,
                                 scaling=self.cfg.TABLE_SCALING)
 
-        log_info("DONE SETTING UP")
-
-    def prompt_query(self):
-        self.demos = self.choose_demos()
-        if not len(self.demos):
-            log_warn('No demos correspond to the query!')
-            
-        self.cfg = self.get_env_cfgs()
-        self.obj_cfgs = self.get_obj_cfgs()
         if self.cfg.DEMOS.PLACEMENT_SURFACE == 'shelf':
             self.load_shelf = True
             log_info('Shelf loaded')
         else:
             log_info('Rack loaded')
             self.load_shelf = False
-        return
+        
+        self.robot.arm.go_home(ignore_physics=True)
+        self.robot.arm.move_ee_xyz([0, 0, 0.2])
+        self.robot.arm.eetool.open()
+        time.sleep(1.5)
+        log_info("DONE SETTING UP")
+
+    def prompt_query(self):
+        self.demos = self.choose_demos()
+        if not len(self.demos):
+            log_warn('No demos correspond to the query!')
 
     def choose_demos(self):
         concepts = list(self.demo_dic.keys())
@@ -207,11 +223,12 @@ class Pipeline():
         
         self.test_obj = [obj for obj in self.obj_classes if obj in corresponding_concept][0]
 
-        if demos and self.table_model is None:
+        if demos is not None and self.table_model is None:
+            log_info('Loading new table')
             self.table_model = np.load(demos[0], allow_pickle=True)['table_urdf'].item()
         return demos
 
-    def get_test_objs(self, demo_objs):
+    def get_test_objs(self):
         #either replace with random objects (manipulation can fail) or label object in demo
         test_obj = self.test_obj
         avoid_shapenet_ids = []
@@ -228,7 +245,7 @@ class Pipeline():
         shapenet_obj_dir = osp.join(path_util.get_ndf_obj_descriptions(), test_obj + '_centered_obj_normalized')
         shapenet_id_list = [fn.split('_')[0] for fn in os.listdir(shapenet_obj_dir)] if test_obj == 'mug' else os.listdir(shapenet_obj_dir)
         for s_id in shapenet_id_list:
-            valid = s_id not in demo_objs and s_id not in avoid_shapenet_ids
+            valid = s_id not in avoid_shapenet_ids
             if valid:
                 # for testing, use the "normalized" object
                 obj_obj_file = osp.join(shapenet_obj_dir, s_id, 'models/model_normalized.obj')
@@ -252,14 +269,6 @@ class Pipeline():
             self.placement_link_id = shelf_link_id
         else:
             self.placement_link_id = rack_link_id 
-
-        obj_shapenet_id = random.sample(test_obj_ids.keys(), 1)[0]
-        id_str = 'Loading Shapenet ID: %s' % obj_shapenet_id
-        print(id_str)
-
-        # for testing, use the "normalized" object
-        obj_file = test_obj_ids[obj_shapenet_id]
-        obj_file_dec = obj_file.split('.obj')[0] + '_dec.obj'
 
         scale_default = self.cfg.MESH_SCALE_DEFAULT
         mesh_scale=[scale_default] * 3
@@ -287,6 +296,14 @@ class Pipeline():
             pose_w_yaw = util.transform_pose(pose, util.pose_from_matrix(rand_yaw_T))
             pos, ori = util.pose_stamped2list(pose_w_yaw)[:3], util.pose_stamped2list(pose_w_yaw)[3:]
 
+
+        obj_shapenet_id = random.sample(test_obj_ids.keys(), 1)[0]
+        id_str = 'Loading Shapenet ID: %s' % obj_shapenet_id
+        print(id_str)
+
+        # for testing, use the "normalized" object
+        obj_file = test_obj_ids[obj_shapenet_id]
+        obj_file_dec = obj_file.split('.obj')[0] + '_dec.obj'
         # convert mesh with vhacd
         if not osp.exists(obj_file_dec):
             p.vhacd(
@@ -311,8 +328,8 @@ class Pipeline():
             'mesh',
             mass=0.01,
             mesh_scale=mesh_scale,
-            visualfile=obj_file,
-            collifile=obj_file,
+            visualfile=obj_file_dec,
+            collifile=obj_file_dec,
             base_pos=pos,
             base_ori=ori)
         p.changeDynamics(obj_id, -1, lateralFriction=0.5)
@@ -321,7 +338,10 @@ class Pipeline():
         safeCollisionFilterPair(self.robot.arm.robot_id, self.table_id, -1, -1, enableCollision=True)
 
         p.changeDynamics(obj_id, -1, linearDamping=5, angularDamping=5)
-        time.sleep(1.5)
+
+        if self.test_obj == 'mug':
+            rack_color = p.getVisualShapeData(self.table_id)[rack_link_id][7]
+            show_link(self.table_id, rack_link_id, rack_color)
         return obj_id, pos, ori
 
     def segment_pcd(self, obj_id):
@@ -359,7 +379,7 @@ class Pipeline():
         target_obj_pcd_obs = target_obj_pcd_obs[inliers]
         return target_obj_pcd_obs, obj_pose_world
 
-    def load_optimizer(self, model, demos, n=None):
+    def load_optimizer(self, demos, n=None):
         if n is None:
             n = len(demos)
         else:
@@ -367,57 +387,54 @@ class Pipeline():
         demo_target_info = []
         demo_shapenet_ids = []
         initial_poses = {}
-        gripper_pts, gripper_pts_rs, place_pts, place_pts_rs = None, None, None, None
+        query_pts, query_pts_rs = None, None
         for fname in demos:
             target_info = None
             data = np.load(fname, allow_pickle=True)
-            if gripper_pts is None and place_pts is None:
-                gripper_pts, place_pts  = process_xq_data(data, shelf=self.load_shelf)
-            if gripper_pts_rs is None and place_pts_rs is None:
-                gripper_pts_rs, place_pts_rs = process_xq_rs_data(data, shelf=self.load_shelf)               
-            shapenet_id = data['shapenet_id'].item()
+            if query_pts is None:
+                query_pts  = process_xq_data(data, shelf=self.load_shelf)
+            if query_pts_rs is None:
+                query_pts_rs = process_xq_rs_data(data, shelf=self.load_shelf)               
+            demo_shapenet_id = data['shapenet_id'].item()
 
             if self.scene_obj is None:
                 target_info, initial_pose = process_demo_data(data, shelf=self.load_shelf)
-                initial_poses[shapenet_id] = initial_pose
-            elif self.scene_obj is not None and shapenet_id in self.initial_poses:
-                target_info, _ = process_demo_data(data, self.initial_poses[shapenet_id], shelf=self.load_shelf)
-                del self.initial_poses[shapenet_id]
+                initial_poses[demo_shapenet_id] = initial_pose
+            elif self.scene_obj is not None and demo_shapenet_id in self.initial_poses:
+                target_info, _ = process_demo_data(data, self.initial_poses[demo_shapenet_id], shelf=self.load_shelf)
+                del self.initial_poses[demo_shapenet_id]
             else:
                 continue
 
             if target_info is not None:
                 demo_target_info.append(target_info)
-                demo_shapenet_ids.append(shapenet_id)
+                demo_shapenet_ids.append(demo_shapenet_id)
             else:
                 log_info('Could not load demo')
 
-        if self.scene_obj:
-            query_pts, query_pts_rs = place_pts, place_pts_rs
-        else:
-            query_pts, query_pts_rs = gripper_pts, gripper_pts_rs
 
         self.initial_poses = initial_poses
         optimizer = OccNetOptimizer(self.model, query_pts=query_pts, query_pts_real_shape=query_pts_rs, opt_iterations=500)
         optimizer.set_demo_info(demo_target_info)
         log_info("OPTIMIZER LOADED")
-        return optimizer, demo_shapenet_ids
+        return optimizer
 
     def find_correspondence(self, optimizer, args, target_obj_pcd, obj_pose_world):
         ee_poses = []
         if self.scene_obj is None:
             #grasping
             log_info('Solve for pre-grasp coorespondance')
-            ee_pose_mats, best_idx = optimizer.optimize_transform_implicit(target_obj_pcd, ee=True)
-            ee_end_pose = util.pose_stamped2list(util.pose_from_matrix(ee_pose_mats[best_idx]))
+            pre_ee_pose_mats, best_idx = optimizer.optimize_transform_implicit(target_obj_pcd, ee=True)
+            pre_ee_pose = util.pose_stamped2list(util.pose_from_matrix(pre_ee_pose_mats[best_idx]))
             # grasping requires post processing to find anti-podal point
-            grasp_pt = post_process_grasp_point(ee_end_pose, target_obj_pcd, thin_feature=(not args.non_thin_feature), grasp_viz=args.grasp_viz, grasp_dist_thresh=args.grasp_dist_thresh)
-            ee_end_pose[:3] = grasp_pt
-            pregrasp_offset_tf = get_ee_offset(ee_pose=ee_end_pose)
-            pre_ee_pose = util.pose_stamped2list(
-                util.transform_pose(pose_source=util.list2pose_stamped(ee_end_pose), pose_transform=util.list2pose_stamped(pregrasp_offset_tf)))
+            grasp_pt = post_process_grasp_point(pre_ee_pose, target_obj_pcd, thin_feature=(not args.non_thin_feature), grasp_viz=args.grasp_viz, grasp_dist_thresh=args.grasp_dist_thresh)
+            pre_ee_pose[:3] = grasp_pt
+            pre_ee_offset_tf = get_ee_offset(ee_pose=pre_ee_pose)
+            pre_pre_ee_pose = util.pose_stamped2list(
+                util.transform_pose(pose_source=util.list2pose_stamped(pre_ee_pose), pose_transform=util.list2pose_stamped(pre_ee_offset_tf)))
+
+            ee_poses.append(pre_pre_ee_pose)
             ee_poses.append(pre_ee_pose)
-            ee_poses.append(ee_end_pose)
         else:
             #placement
             log_info('Solve for placement coorespondance')
@@ -435,14 +452,13 @@ class Pipeline():
 
             pre_ee_end_pose2 = util.transform_pose(pose_source=ee_end_pose, pose_transform=preplace_offset_tf)
             pre_ee_end_pose1 = util.transform_pose(pose_source=pre_ee_end_pose2, pose_transform=preplace_horizontal_tf)        
-                        
-            # get pose that's straight up
+    
+                # get pose that's straight up
             offset_pose = util.transform_pose(
                 pose_source=util.list2pose_stamped(np.concatenate(self.robot.arm.get_ee_pose()[:2]).tolist()),
                 pose_transform=util.list2pose_stamped([0, 0, 0.15, 0, 0, 0, 1])
             )
-
-            ee_poses.append(util.pose_stamped2list(offset_pose))
+            ee_poses.append(util.pose_stamped2list(offset_pose)) 
             ee_poses.append(util.pose_stamped2list(pre_ee_end_pose1))
             ee_poses.append(util.pose_stamped2list(pre_ee_end_pose2))
             ee_poses.append(util.pose_stamped2list(ee_end_pose))
@@ -462,70 +478,88 @@ class Pipeline():
                 safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=obj_id, linkIndexA=i, linkIndexB=-1, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
             self.robot.arm.eetool.open()
         else:
-            # reset object to placement pose to detect placement success
-            safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=False)
-            safeCollisionFilterPair(obj_id, self.table_id, -1, self.placement_link_id, enableCollision=False)
-            self.robot.pb_client.set_step_sim(True)
-            self.robot.pb_client.reset_body(obj_id, final_pos[:3], final_pos[3:])
+            # # reset object to placement pose to detect placement success
+            # safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=False)
+            # safeCollisionFilterPair(obj_id, self.table_id, -1, self.placement_link_id, enableCollision=False)
+            # self.robot.pb_client.set_step_sim(True)
+            # self.robot.pb_client.reset_body(obj_id, final_pos[:3], final_pos[3:])
 
-            time.sleep(0.2)
-            safeCollisionFilterPair(obj_id, self.table_id, -1, self.placement_link_id, enableCollision=True)
-            self.robot.pb_client.set_step_sim(False)
-            time.sleep(0.2)
+            # time.sleep(0.2)
+            # safeCollisionFilterPair(obj_id, self.table_id, -1, self.placement_link_id, enableCollision=True)
+            # self.robot.pb_client.set_step_sim(False)
+            # time.sleep(0.2)
 
-            safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
-            self.robot.pb_client.reset_body(obj_id, pos, ori)
+            # safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
+            # self.robot.pb_client.reset_body(obj_id, pos, ori)
+            pass
 
     def get_iks(self, ee_poses):
-        jnt_pos = grasp_jnt_pos = grasp_plan = None
-        jnt_poses = [None]*len(ee_poses)
-        for i, pose in enumerate(ee_poses):
-            jnt_pos = jnt_poses[i]
-            log_info('Attempt to find IK', i)
+        # jnt_poses = [None]*len(ee_poses)
+        # for i, pose in enumerate(ee_poses):
+        #     log_info('Attempt to find IK %i' % i)
+        #     jnt_poses[i] = self.cascade_ik(pose)
+        return [self.cascade_ik(pose) for pose in ee_poses]
+    
+    def cascade_ik(self, ee_pose):
+        jnt_pos = None
+        if jnt_pos is None:
+            jnt_pos = self.ik_helper.get_feasible_ik(ee_pose, verbose=True)
             if jnt_pos is None:
-                jnt_pos = self.ik_helper.get_feasible_ik(pose, verbose=True)
+                jnt_pos = self.ik_helper.get_ik(ee_pose)
                 if jnt_pos is None:
-                    jnt_pos = self.ik_helper.get_ik(pose)
-                    if jnt_pos is None:
-                        jnt_pos = self.robot.arm.compute_ik(pose[:3], pose[3:])
-            if jnt_pos is None:
-                log_warn('Failed to find IK')
-            jnt_poses[i] = jnt_pos
-        return jnt_poses
+                    jnt_pos = self.robot.arm.compute_ik(ee_pose[:3], ee_pose[3:])
+        if jnt_pos is None:
+            log_warn('Failed to find IK')
+        return jnt_pos
 
-    def motion_plan(self, poses, obj_id):
-        prev_pos = self.robot.arm.get_jpos()
-        for i, jnt_pos in enumerate(poses):
-            if jnt_pos is None:
-                log_warn('No IK for jnt', i)
-                break
-            print('finding plan from', i-1, 'to', i)
-            # print('pose', i, ':', ee_poses[i])
-            plan = self.ik_helper.plan_joint_motion(prev_pos, jnt_pos)
-            # if plan is None:
-            #     plan = self.ik_helper.plan_joint_motion(prev_pos, jnt_pos)
-            if plan is None:
-                log_warn('FAILED TO FIND A PLAN. STOPPING')
-                break
-            for jnt in plan:
-                self.robot.arm.set_jpos(jnt, wait=False)
-                time.sleep(0.025)
-            self.robot.arm.set_jpos(plan[-1], wait=True)
-            prev_pos = jnt_pos
-
-            if i == 0:
-                # turn ON collisions between robot and object, and close fingers
-                for _ in range(p.getNumJoints(self.robot.arm.robot_id)):
-                    safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=obj_id, linkIndexA=i, linkIndexB=-1, enableCollision=True, physicsClientId=self.robot.pb_client.get_client_id())
-                    safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=self.table_id, linkIndexA=i, linkIndexB=self.placement_link_id, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
+    # def plan_and_execute(self, poses, obj_id):
+    #     prev_pos = self.robot.arm.get_jpos()
+    #     for i, jnt_pos in enumerate(poses):
+    #         if jnt_pos is None:
+    #             log_warn('No IK for jnt', i)
+    #             break
             
-            input('Press enter to continue')
+    #         plan = self.plan_motion(prev_pos, jnt_pos)
+    #         self.execute_plan(plan)
+    #         prev_pos = jnt_pos
+
+    #         if i == 0:
+    #             # turn ON collisions between robot and object, and close fingers
+    #             for _ in range(p.getNumJoints(self.robot.arm.robot_id)):
+    #                 safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=obj_id, linkIndexA=i, linkIndexB=-1, enableCollision=True, physicsClientId=self.robot.pb_client.get_client_id())
+    #                 safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=self.table_id, linkIndexA=i, linkIndexB=self.placement_link_id, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
+            
+    #         input('Press enter to continue')
+
+    def plan_motion(self, start_pos, goal_pos):
+        return self.ik_helper.plan_joint_motion(start_pos, goal_pos)
+
+    def execute_plan(self, plan):
+        for jnt in plan:
+            self.robot.arm.set_jpos(jnt, wait=False)
+            time.sleep(0.025)
+        self.robot.arm.set_jpos(plan[-1], wait=True)
+
+    def allow_pregrasp_collision(self, obj_id):
+        log_info('Turning off collision between gripper and object for pre-grasp')
+        # turn ON collisions between robot and object, and close fingers
+        for i in range(p.getNumJoints(self.robot.arm.robot_id)):
+            safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=obj_id, linkIndexA=i, linkIndexB=-1, enableCollision=True, physicsClientId=self.robot.pb_client.get_client_id())
+            safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=self.table_id, linkIndexA=i, linkIndexB=self.placement_link_id, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
+    
+    def is_pregrasp_state(self):
+        return self.scene_obj is None
 
     def post_execution(self, obj_id, pos, ori):
         if self.scene_obj is None:
-            time.sleep(1.5)
+            # turn ON collisions between robot and object, and close fingers
+            for i in range(p.getNumJoints(self.robot.arm.robot_id)):
+                safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=obj_id, linkIndexA=i, linkIndexB=-1, enableCollision=True, physicsClientId=self.robot.pb_client.get_client_id())
+                safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=self.table_id, linkIndexA=i, linkIndexB=self.placement_link_id, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
+
+            time.sleep(0.8)
             jnt_pos_before_grasp = self.robot.arm.get_jpos()
-            soft_grasp_close(self.robot, self.finger_joint_id, force=90)
+            soft_grasp_close(self.robot, self.finger_joint_id, force=40)
             time.sleep(1.5)
             grasp_success = object_is_still_grasped(self.robot, obj_id, self.right_pad_id, self.left_pad_id) 
             time.sleep(1.5)
@@ -533,7 +567,7 @@ class Pipeline():
             if grasp_success:
                 log_info("It is grasped")
                 self.robot.arm.set_jpos(jnt_pos_before_grasp, ignore_physics=True)
-                self.o_cid = constraint_grasp_close(self.robot, obj_id)
+                # self.o_cid = constraint_grasp_close(self.robot, obj_id)
             else:
                 log_info('Not grasped')
         else:
@@ -544,7 +578,7 @@ class Pipeline():
                 safeCollisionFilterPair(obj_id, self.table_id, -1, self.placement_link_id, enableCollision=True)
                 
                 p.changeDynamics(obj_id, -1, linearDamping=5, angularDamping=5)
-                constraint_grasp_open(self.o_cid)
+                # constraint_grasp_open(self.o_cid)
                 self.robot.arm.eetool.open()
 
                 time.sleep(0.2)
