@@ -49,10 +49,12 @@ class Pipeline():
 
     def __init__(self, global_dict, args):
         self.obj_classes = ['bottle', 'mug', 'bowl']
+        self.tables = ['table_rack.urdf', 'table_shelf.urdf']
         self.ll_model = global_dict['ll_model']
         self.model = global_dict['ndf_model']
         self.all_objs_dirs = global_dict['all_objs_dirs']
         self.all_demos_dirs = global_dict['all_demos_dirs']
+        self.args = args
 
         self.random_pos = False
         self.ee_pose = None
@@ -62,14 +64,14 @@ class Pipeline():
         self.cfg = get_eval_cfg_defaults()
 
     
-        self.load_robot(args)
+        self.load_robot()
         self.load_cams()
     
         self.demo_dic = self.get_demo_dict()
         print('All demo labels:', self.demo_dic.keys())
 
-        random.seed(args.seed)
-        np.random.seed(args.seed)
+        random.seed(self.args.seed)
+        np.random.seed(self.args.seed)
     
     def step(self, scene):
         while True:
@@ -81,6 +83,8 @@ class Pipeline():
                 break
             elif x == '2':
                 self.robot.pb_client.remove_body(scene['obj_id'])
+                self.robot.pb_client.remove_body(self.table_id)
+
                 # self.robot.arm.go_home(ignore_physics=True)
                 # self.robot.arm.move_ee_xyz([0, 0, 0.2])
                 # self.robot.arm.eetool.open()
@@ -130,8 +134,8 @@ class Pipeline():
         log_info("Set up config settings for %s" % self.test_obj)
         return obj_cfg
 
-    def load_robot(self, args):
-        self.robot = Robot('franka', pb_cfg={'gui': args.pybullet_viz}, arm_cfg={'self_collision': False, 'seed': args.seed})
+    def load_robot(self):
+        self.robot = Robot('franka', pb_cfg={'gui': self.args.pybullet_viz}, arm_cfg={'self_collision': False, 'seed': self.args.seed})
         self.ik_helper = FrankaIK(gui=False)
         
         self.finger_joint_id = 9
@@ -166,20 +170,26 @@ class Pipeline():
         table_ori = euler2quat([0, 0, np.pi / 2])
 
         # this is the URDF that was used in the demos -- make sure we load an identical one
-        tmp_urdf_fname = osp.join(path_util.get_ndf_descriptions(), 'hanging/table/table_tmp.urdf')
-        open(tmp_urdf_fname, 'w').write(self.table_model)
-        self.table_id = self.robot.pb_client.load_urdf(tmp_urdf_fname,
-                                self.cfg.TABLE_POS,
-                                table_ori,
-                                scaling=self.cfg.TABLE_SCALING)
-
+        # tmp_urdf_fname = osp.join(path_util.get_ndf_descriptions(), 'hanging/table/table_tmp.urdf')
+        # open(tmp_urdf_fname, 'w').write(self.table_model)
+        # self.table_id = self.robot.pb_client.load_urdf(tmp_urdf_fname,
+        #                         self.cfg.TABLE_POS,
+        #                         table_ori,
+        #                         scaling=self.cfg.TABLE_SCALING)
+        # print('TABLE ID', self.table_id, open(tmp_urdf_fname, 'r').read())
         if self.cfg.DEMOS.PLACEMENT_SURFACE == 'shelf':
             self.load_shelf = True
+            table_urdf_file = 'table_shelf.urdf'
             log_info('Shelf loaded')
         else:
             log_info('Rack loaded')
             self.load_shelf = False
-        
+            table_urdf_file = 'table_rack.urdf'
+
+        self.table_id = self.robot.pb_client.load_urdf(osp.join(path_util.get_ndf_descriptions(), 'hanging/table', table_urdf_file),
+                                self.cfg.TABLE_POS, 
+                                table_ori,
+                                scaling=self.cfg.TABLE_SCALING)
         self.robot.arm.go_home(ignore_physics=True)
         self.robot.arm.move_ee_xyz([0, 0, 0.2])
         self.robot.arm.eetool.open()
@@ -224,8 +234,8 @@ class Pipeline():
         self.test_obj = [obj for obj in self.obj_classes if obj in corresponding_concept][0]
 
         if demos is not None and self.table_model is None:
-            log_info('Loading new table')
             self.table_model = np.load(demos[0], allow_pickle=True)['table_urdf'].item()
+            log_info('Found new table model')
         return demos
 
     def get_test_objs(self):
@@ -338,11 +348,13 @@ class Pipeline():
         safeCollisionFilterPair(self.robot.arm.robot_id, self.table_id, -1, -1, enableCollision=True)
 
         p.changeDynamics(obj_id, -1, linearDamping=5, angularDamping=5)
+        time.sleep(1.5)
 
-        if self.test_obj == 'mug':
-            rack_color = p.getVisualShapeData(self.table_id)[rack_link_id][7]
-            show_link(self.table_id, rack_link_id, rack_color)
-        return obj_id, pos, ori
+        # if self.test_obj == 'mug':
+        #     rack_color = p.getVisualShapeData(self.table_id)[rack_link_id][7]
+        #     show_link(self.table_id, rack_link_id, rack_color)
+        # return obj_id, pos, ori
+        return obj_id
 
     def segment_pcd(self, obj_id):
         depth_imgs = []
@@ -405,21 +417,23 @@ class Pipeline():
                 del self.initial_poses[demo_shapenet_id]
             else:
                 continue
-
+            
             if target_info is not None:
                 demo_target_info.append(target_info)
                 demo_shapenet_ids.append(demo_shapenet_id)
             else:
                 log_info('Could not load demo')
 
-
+        if self.scene_obj:
+            scene = trimesh_util.trimesh_show([target_info['demo_obj_pts'],target_info['demo_query_pts_real_shape']], show=True)
+            
         self.initial_poses = initial_poses
         optimizer = OccNetOptimizer(self.model, query_pts=query_pts, query_pts_real_shape=query_pts_rs, opt_iterations=500)
         optimizer.set_demo_info(demo_target_info)
         log_info("OPTIMIZER LOADED")
         return optimizer
 
-    def find_correspondence(self, optimizer, args, target_obj_pcd, obj_pose_world):
+    def find_correspondence(self, optimizer, target_obj_pcd, obj_pose_world):
         ee_poses = []
         if self.scene_obj is None:
             #grasping
@@ -427,7 +441,7 @@ class Pipeline():
             pre_ee_pose_mats, best_idx = optimizer.optimize_transform_implicit(target_obj_pcd, ee=True)
             pre_ee_pose = util.pose_stamped2list(util.pose_from_matrix(pre_ee_pose_mats[best_idx]))
             # grasping requires post processing to find anti-podal point
-            grasp_pt = post_process_grasp_point(pre_ee_pose, target_obj_pcd, thin_feature=(not args.non_thin_feature), grasp_viz=args.grasp_viz, grasp_dist_thresh=args.grasp_dist_thresh)
+            grasp_pt = post_process_grasp_point(pre_ee_pose, target_obj_pcd, thin_feature=(not self.args.non_thin_feature), grasp_viz=self.args.grasp_viz, grasp_dist_thresh=self.args.grasp_dist_thresh)
             pre_ee_pose[:3] = grasp_pt
             pre_ee_offset_tf = get_ee_offset(ee_pose=pre_ee_pose)
             pre_pre_ee_pose = util.pose_stamped2list(
@@ -477,6 +491,8 @@ class Pipeline():
                 safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=self.table_id, linkIndexA=i, linkIndexB=-1, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
                 safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=obj_id, linkIndexA=i, linkIndexB=-1, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
             self.robot.arm.eetool.open()
+            time.sleep(0.25)
+
         else:
             # # reset object to placement pose to detect placement success
             # safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=False)

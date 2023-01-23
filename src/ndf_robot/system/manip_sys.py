@@ -13,25 +13,32 @@ from sentence_transformers import util as sentence_util
 import ndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_network
 
 
-def main(pipeline, args):
+def main(pipeline):
     # torch.manual_seed(args.seed)
     pipeline.prompt_query()
 
     if pipeline.scene_obj is None:
         pipeline.load_table()
+        log_info('Loaded new table')
 
         # load a test object
         test_obj_ids = pipeline.get_test_objs()
-        obj_id, pos, ori = pipeline.add_object(test_obj_ids)
-        target_obj_pcd, obj_pose_world = pipeline.segment_pcd(obj_id)
+        # obj_id, pos, ori = pipeline.add_object(test_obj_ids)
+        # target_obj_pcd, obj_pose_world = pipeline.segment_pcd(obj_id)
+        obj_id = pipeline.add_object(test_obj_ids)
     else:
-        target_obj_pcd, obj_pose_world, obj_id = pipeline.scene_obj
-        obj_pose_world_list = util.pose_stamped2list(obj_pose_world)
-        pos, ori = obj_pose_world_list[:3], obj_pose_world_list[3:]
+    #     target_obj_pcd, obj_pose_world, obj_id = pipeline.scene_obj
+    #     obj_pose_world_list = util.pose_stamped2list(obj_pose_world)
+    #     pos, ori = obj_pose_world_list[:3], obj_pose_world_list[3:]
+        obj_id = pipeline.scene_obj[2]
+    target_obj_pcd, obj_pose_world = pipeline.segment_pcd(obj_id)
+    obj_pose_world_list = util.pose_stamped2list(obj_pose_world)
+    pos, ori = obj_pose_world_list[:3], obj_pose_world_list[3:]
+
     print('Object at pose:', util.pose_stamped2list(obj_pose_world))
     optimizer = pipeline.load_optimizer(pipeline.demos)
 
-    ee_poses = pipeline.find_correspondence(optimizer, args, target_obj_pcd, obj_pose_world)
+    ee_poses = pipeline.find_correspondence(optimizer, target_obj_pcd, obj_pose_world)
     obj_end_pose_list = ee_poses[-1]
 
     pipeline.pre_execution(obj_id, pos, ori, obj_end_pose_list)
@@ -49,7 +56,7 @@ def main(pipeline, args):
             break
         pipeline.execute_plan(plan)
         prev_pos = jnt_pos
-        input('Press enter to continue')
+        # input('Press enter to continue')
 
     pipeline.post_execution(obj_id, pos, ori)
 
@@ -110,4 +117,4 @@ if __name__ == "__main__":
     pipeline = Pipeline(global_dict, args)
     
     for iter in range(args.iterations):
-        main(pipeline, args)
+        main(pipeline)
