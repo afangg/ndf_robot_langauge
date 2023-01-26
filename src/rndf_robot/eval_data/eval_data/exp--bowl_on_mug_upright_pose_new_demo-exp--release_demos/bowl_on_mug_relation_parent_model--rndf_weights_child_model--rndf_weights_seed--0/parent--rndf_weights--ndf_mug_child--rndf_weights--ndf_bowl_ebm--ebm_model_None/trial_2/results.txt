@@ -1,0 +1,1 @@
+{'place_success': True, 'place_success_list': [True, True, True], 'current_success_rate': 1.0, 'success_criteria_dict': {'touching_surf': True, 'fell_off_upside_down': True}}
