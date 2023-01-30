@@ -42,55 +42,18 @@ from airobot.utils.pb_util import create_pybullet_client
 
 from sentence_transformers import SentenceTransformer
 from sentence_transformers import util as sentence_util
-
-mesh_data_dirs = {
-    'mug': 'mug_centered_obj_normalized', 
-    'bottle': 'bottle_centered_obj_normalized', 
-    'bowl': 'bowl_centered_obj_normalized',
-    'rack': 'syn_racks_easy_obj',
-    'container': 'box_containers_unnormalized'
-}
-mesh_data_dirs = {k: osp.join(path_util.get_rndf_obj_descriptions(), v) for k, v in mesh_data_dirs.items()}
-
-bad_ids = {
-    'rack': [],
-    'bowl': bad_shapenet_bowls_ids_list,
-    'mug': bad_shapenet_mug_ids_list,
-    'bottle': bad_shapenet_bottles_ids_list,
-    'container': []
-}
-
-upright_orientation_dict = {
-    'mug': common.euler2quat([np.pi/2, 0, 0]).tolist(), 
-    'bottle': common.euler2quat([np.pi/2, 0, 0]).tolist(), 
-    'bowl': common.euler2quat([np.pi/2, 0, 0]).tolist(),
-    'rack': common.euler2quat([0, 0, 0]).tolist(),
-    'container': common.euler2quat([0, 0, 0]).tolist(),
-}
+import rndf_utils
 
 def show_link(obj_id, link_id, color):
     if link_id is not None:
         p.changeVisualShape(obj_id, link_id, rgbaColor=color)
 
-def create_target_desc_subdir(demo_path, parent_model_path, child_model_path):
-    parent_model_name_full = parent_model_path.split('ndf_vnn/')[-1]
-    child_model_name_full = child_model_path.split('ndf_vnn/')[-1]
-
-    parent_model_name_specific = parent_model_name_full.split('.pth')[0].replace('/', '--')
-    child_model_name_specific = child_model_name_full.split('.pth')[0].replace('/', '--')
-    
-    subdir_name = f'parent_model--{parent_model_name_specific}_child--{child_model_name_specific}'
-    dirname = osp.join(demo_path, subdir_name)
-    util.safe_makedirs(dirname)
-    return dirname
-
 class Pipeline():
 
-    def __init__(self, global_dict, args):
+    def __init__(self, args):
         self.tables = ['table_rack.urdf', 'table_shelf.urdf']
-        self.ll_model = global_dict['ll_model']
-        self.model = global_dict['ndf_model']
-        self.all_demos_dirs = global_dict['all_demos_dirs']
+        self.ll_model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+        self.all_demos_dirs = osp.join(path_util.get_rndf_data(), 'release_demos')
         self.args = args
 
         self.random_pos = False
@@ -100,11 +63,6 @@ class Pipeline():
         self.scene_dict = dict(parent={}, child={})
 
         self.cfg = get_eval_cfg_defaults()
-    
-        self.load_robot()
-        self.load_cams()
-    
-        self.demo_dic = self.get_demo_dict()
 
         random.seed(self.args.seed)
         np.random.seed(self.args.seed)
@@ -125,9 +83,9 @@ class Pipeline():
                 self.robot.pb_client.remove_body(scene['obj_id'])
                 self.robot.pb_client.remove_body(self.table_id)
 
-                # self.robot.arm.go_home(ignore_physics=True)
-                # self.robot.arm.move_ee_xyz([0, 0, 0.2])
-                # self.robot.arm.eetool.open()
+                self.robot.arm.go_home(ignore_physics=True)
+                self.robot.arm.move_ee_xyz([0, 0, 0.2])
+                self.robot.arm.eetool.open()
 
                 self.scene_obj = None
                 self.ee_pose = None
@@ -136,7 +94,7 @@ class Pipeline():
                 time.sleep(1.5)
                 break
 
-    def load_robot(self):
+    def setup_client(self):
         self.robot = Robot('franka', pb_cfg={'gui': self.args.pybullet_viz}, arm_cfg={'self_collision': False, 'seed': self.args.seed})
         # self.ik_helper = FrankaIK(gui=False)
         
@@ -149,14 +107,15 @@ class Pipeline():
 
         # reset
         self.robot.arm.reset(force_reset=True)
+        self.setup_cams()
+
+    def setup_cams(self):
         self.robot.cam.setup_camera(
             focus_pt=[0.4, 0.0, self.cfg.TABLE_Z],
             dist=0.9,
             yaw=45,
             pitch=-25,
             roll=0)
-
-    def load_cams(self):
         self.cams = MultiCams(self.cfg.CAMERA, self.robot.pb_client, n_cams=self.cfg.N_CAMERAS)
         log_info('Number of cameras: %s' % len(self.cams.cams))
         cam_info = {}
@@ -164,19 +123,7 @@ class Pipeline():
         for cam in self.cams.cams:
             cam_info['pose_world'].append(util.pose_from_matrix(cam.cam_ext_mat))
 
-    def load_table(self):            
-        self.cfg = self.get_env_cfgs()
-        self.obj_cfgs = self.get_obj_cfgs()
-
-        # this is the URDF that was used in the demos -- make sure we load an identical one
-        # tmp_urdf_fname = osp.join(path_util.get_ndf_descriptions(), 'hanging/table/table_tmp.urdf')
-        # open(tmp_urdf_fname, 'w').write(self.table_model)
-        # self.table_id = self.robot.pb_client.load_urdf(tmp_urdf_fname,
-        #                         self.cfg.TABLE_POS,
-        #                         table_ori,
-        #                         scaling=self.cfg.TABLE_SCALING)
-        # print('TABLE ID', self.table_id, open(tmp_urdf_fname, 'r').read())
-
+    def setup_table(self):            
         table_fname = osp.join(path_util.get_rndf_descriptions(), 'hanging/table')
         table_urdf_file = 'table_manual.urdf'
         print('TABLE MODEL', self.table_model)
@@ -199,16 +146,16 @@ class Pipeline():
         self.viz.recorder.register_object(self.table_id, table_fname)
         self.viz.pause_mc_thread(False)
 
-        self.robot.arm.go_home(ignore_physics=True)
-        self.robot.arm.move_ee_xyz([0, 0, 0.2])
-        self.robot.arm.eetool.open()
         time.sleep(1.5)
         log_info("DONE SETTING UP")
+
+    #################################################################################################
+    # Loading config settings and files
 
     def get_env_cfgs(self):
         # general experiment + environment setup/scene generation configs
         cfg = get_eval_cfg_defaults()
-        config = 'base_cfg.yaml' if len(self.test_objs) > 1 else 'eval_'+self.test_objs[0]+'_gen.yaml'
+        config = 'base_config.yaml' if len(self.test_objs) > 1 else 'eval_'+self.test_objs[0]+'_gen.yaml'
         config_fname = osp.join(path_util.get_rndf_config(), 'eval_cfgs', config)
         if osp.exists(config_fname):
             cfg.merge_from_file(config_fname)
@@ -221,7 +168,7 @@ class Pipeline():
     def get_obj_cfgs(self):
         # object specific configs
         obj_cfg = get_obj_cfg_defaults()
-        config = 'base_cfg' if len(self.test_objs) > 1 else self.test_objs[0]
+        config = 'base_config' if len(self.test_objs) > 1 else self.test_objs[0]
         obj_config_name = osp.join(path_util.get_rndf_config(), config+'_obj_cfg.yaml')
         if osp.exists(obj_config_name):
             obj_cfg.merge_from_file(obj_config_name)
@@ -231,7 +178,7 @@ class Pipeline():
         # obj_cfg.freeze()
         return obj_cfg
 
-    def get_demo_dict(self):
+    def load_demos_dict(self):
         demo_dic = {}
         for class_pair in os.listdir(self.all_demos_dirs):
             print(class_pair)
@@ -245,22 +192,62 @@ class Pipeline():
                 if concept not in demo_dic:
                     demo_dic[concept] = []
                 demo_dic[concept].append(demo_path)
-        return demo_dic
+        self.demo_dic = demo_dic
+
+    def load_meshes_dict(self):
+        mesh_names = {}
+        for k, v in rndf_utils.mesh_data_dirs.items():
+            # get train samples
+            objects_raw = os.listdir(v)
+            objects_filtered = [fn for fn in objects_raw if (fn.split('/')[-1] not in rndf_utils.bad_ids[k] and '_dec' not in fn)]
+            # objects_filtered = objects_raw
+            total_filtered = len(objects_filtered)
+            train_n = int(total_filtered * 0.9); test_n = total_filtered - train_n
+
+            train_objects = sorted(objects_filtered)[:train_n]
+            test_objects = sorted(objects_filtered)[train_n:]
+
+            log_info('\n\n\nTest objects: ')
+            log_info(test_objects)
+            # log_info('\n\n\n')
+
+            mesh_names[k] = objects_filtered
+        self.obj_meshes = mesh_names
+
+    def load_models(self):
+        # LOAD EACH MODEL
+        parent_model_path = osp.join(path_util.get_rndf_model_weights(), self.args.parent_model_path)
+        child_model_path = osp.join(path_util.get_rndf_model_weights(), self.args.child_model_path)
+        parent_model = vnn_occupancy_network.VNNOccNet(latent_dim=256, model_type='pointnet', return_features=True, sigmoid=True).cuda()
+        self.scene_dict['parent']['model_path'] = parent_model_path
+        self.scene_dict['child']['model_path'] = child_model_path
+
+        child_model = vnn_occupancy_network.VNNOccNet(latent_dim=256, model_type='pointnet', return_features=True, sigmoid=True).cuda()
+        parent_model.load_state_dict(torch.load(parent_model_path))
+        child_model.load_state_dict(torch.load(child_model_path))
+
+        self.scene_dict['parent']['model'] = parent_model
+        self.scene_dict['child']['model'] = child_model
+        
+    #################################################################################################
+    # Language
 
     def prompt_query(self):
         print('All demo labels:', self.demo_dic.keys())
-        self.demos, concept = self.choose_demos()
+        self.demos, concept = self.process_query()
+        print(self.demos)
         concept = frozenset(concept.lower().replace('_', ' ').split(' '))
         if not len(self.demos):
             log_warn('No demos correspond to the query!')
-        test_obj_classes = set(mesh_data_dirs.keys())
+        test_obj_classes = set(rndf_utils.mesh_data_dirs.keys())
         self.test_objs = concept.intersection(test_obj_classes)
-        print(concept, test_obj_classes, self.test_objs)
+        
         self.scene_dict['child']['class'], self.scene_dict['parent']['class'] = self.test_objs
         log_info('Parent: %s'% self.scene_dict['parent']['class'])
         log_info('Child: %s'% self.scene_dict['child']['class'])
 
-    def choose_demos(self):
+
+    def process_query(self):
         concepts = list(self.demo_dic.keys())
         n = len(concepts)
         concept_embeddings = self.ll_model.encode(concepts, convert_to_tensor=True)
@@ -297,85 +284,34 @@ class Pipeline():
             log_info('Found new table model')
         return demos, corresponding_concept
 
-    # def get_test_objs(self):
-    #     #either replace with random objects (manipulation can fail) or label object in demo
-    #     test_obj = self.test_obj
-    #     avoid_shapenet_ids = []
-    #     if test_obj == 'mug':
-    #         avoid_shapenet_ids = bad_shapenet_mug_ids_list + self.cfg.MUG.AVOID_SHAPENET_IDS
-    #     elif test_obj == 'bowl':
-    #         avoid_shapenet_ids = bad_shapenet_bowls_ids_list + self.cfg.BOWL.AVOID_SHAPENET_IDS
-    #     elif test_obj == 'bottle':
-    #         avoid_shapenet_ids = bad_shapenet_bottles_ids_list + self.cfg.BOTTLE.AVOID_SHAPENET_IDS 
-    #     else:
-    #         test_shapenet_ids = []
-    #     # get objects that we can use for testing
-    #     test_object_ids = {}
-    #     shapenet_obj_dir = osp.join(path_util.get_ndf_obj_descriptions(), test_obj + '_centered_obj_normalized')
-    #     shapenet_id_list = [fn.split('_')[0] for fn in os.listdir(shapenet_obj_dir)] if test_obj == 'mug' else os.listdir(shapenet_obj_dir)
-    #     for s_id in shapenet_id_list:
-    #         valid = s_id not in avoid_shapenet_ids
-    #         if valid:
-    #             # for testing, use the "normalized" object
-    #             obj_obj_file = osp.join(shapenet_obj_dir, s_id, 'models/model_normalized.obj')
-    #             test_object_ids[s_id] = obj_obj_file
-    #     self.test_obj = test_obj
-    #     return test_object_ids
+    #################################################################################################
+    # Set up scene
 
-    def load_all_obj_files(self):
-        mesh_names = {}
-        for k, v in mesh_data_dirs.items():
-            # get train samples
-            objects_raw = os.listdir(v)
-            objects_filtered = [fn for fn in objects_raw if (fn.split('/')[-1] not in bad_ids[k] and '_dec' not in fn)]
-            # objects_filtered = objects_raw
-            total_filtered = len(objects_filtered)
-            train_n = int(total_filtered * 0.9); test_n = total_filtered - train_n
-
-            train_objects = sorted(objects_filtered)[:train_n]
-            test_objects = sorted(objects_filtered)[train_n:]
-
-            log_info('\n\n\nTest objects: ')
-            log_info(test_objects)
-            # log_info('\n\n\n')
-
-            mesh_names[k] = objects_filtered
-        self.obj_meshes = mesh_names
-
-    def generate_scene_objs(self):
+    def setup_scene_objs(self):
         # scene_objs = []
         # for test_obj in [self.child_class, self.parent_class]:
         #     obj_shapenet_id = random.sample(self.obj_meshes[test_obj].keys(), 1)[0]
         #     id_str = 'Loading Shapenet ID: %s' % obj_shapenet_id
         #     print(id_str)
         #     scene_objs.append(obj_shapenet_id)
-        self.scene_dict['parent']['shapenet_id'] = random.sample(self.obj_meshes[self.scene_dict['parent']['class']], 1)[0]
-        self.scene_dict['child']['shapenet_id'] = random.sample(self.obj_meshes[self.scene_dict['child']['class']], 1)[0]
-        log_info('Loading child shape: %s' % self.scene_dict['child']['shapenet_id'])
-        log_info('Loading parent shape: %s' % self.scene_dict['parent']['shapenet_id'])
 
-        parent_obj_id = self.add_test_objs(self.scene_dict['parent']['shapenet_id'], self.scene_dict['parent']['class'])
-        child_obj_id = self.add_test_objs(self.scene_dict['child']['shapenet_id'], self.scene_dict['child']['class'])
-        return [parent_obj_id, child_obj_id]
+        for obj_key in ['parent', 'child']:
+            self.scene_dict[obj_key]['shapenet_id'] = random.sample(self.obj_meshes[self.scene_dict[obj_key]['class']], 1)[0]
+            log_info('Loading %s shape: %s' % (obj_key, self.scene_dict[obj_key]['shapenet_id']))
+            obj_id, obj_pose_world = self.add_test_objs(self.scene_dict[obj_key]['shapenet_id'], self.scene_dict[obj_key]['class'], obj_key)
+            self.scene_dict[obj_key]['obj_id'] = obj_id
+            self.scene_dict[obj_key]['pose'] = obj_pose_world
+        
+    def preprocess_obj(self, obj_class):
+        parent_extent = rndf_utils.reshape_bottle()
+        # TODO
 
-    def add_test_objs(self, shapenet_id, obj_class):
+    def add_test_objs(self, shapenet_id, obj_class, obj_key):
         x_low, x_high = self.cfg.OBJ_SAMPLE_X_HIGH_LOW
         y_low, y_high = self.cfg.OBJ_SAMPLE_Y_HIGH_LOW
 
-        # if self.test_obj == 'mug':
-        #     rack_link_id = 0
-        #     shelf_link_id = 1
-        # elif self.test_obj in ['bowl', 'bottle']:
-        #     rack_link_id = None
-        #     shelf_link_id = 0
-
-        # if self.cfg.DEMOS.PLACEMENT_SURFACE == 'shelf':
-        #     self.placement_link_id = shelf_link_id
-        # elif self.cfg.DEMOS.PLACEMENT_SURFACE == 'rack':
-        #     self.placement_link_id = rack_link_id 
-        # else:
-        #     self.placement_link_id = rack_link_id 
         self.placement_link_id = 0 
+        upright_orientation = rndf_utils.upright_orientation_dict[obj_class]
 
         scale_default = self.cfg.MESH_SCALE_DEFAULT
         mesh_scale=[scale_default] * 3
@@ -396,7 +332,6 @@ class Pipeline():
             pos, ori = util.pose_stamped2list(pose_w_yaw)[:3], util.pose_stamped2list(pose_w_yaw)[3:]
 
         else:
-            upright_orientation = common.euler2quat([np.pi/2, 0, 0]).tolist()
             pos = [np.random.random() * (x_high - x_low) + x_low, np.random.random() * (y_high - y_low) + y_low, self.cfg.TABLE_Z]
             pose = util.list2pose_stamped(pos + upright_orientation)
             rand_yaw_T = util.rand_body_yaw_transform(pos, min_theta=-np.pi, max_theta=np.pi)
@@ -406,10 +341,15 @@ class Pipeline():
 
         # for testing, use the "normalized" object
         # obj_file = self.all_demos_dirs[obj_class][shapenet_id]
-        obj_file = osp.join(mesh_data_dirs[obj_class], shapenet_id, 'models/model_normalized.obj')
-        print(obj_file)
+        if obj_class in ['bottle', 'bowl', 'mug']:
+            obj_file = osp.join(rndf_utils.mesh_data_dirs[obj_class], shapenet_id, 'models/model_normalized.obj')
+            obj_file_dec = obj_file.split('.obj')[0] + '_dec.obj'
+        # IF IT'S NOT SHAPENET NO NESTED FOLDERS
+        else:
+            obj_file = osp.join(rndf_utils.mesh_data_dirs[obj_class], shapenet_id + '.obj')
+            obj_file_dec = obj_file.split('.obj')[0] + '_dec.obj'
+        obj_file = osp.join(rndf_utils.mesh_data_dirs[obj_class], shapenet_id, 'models/model_normalized.obj')
 
-        obj_file_dec = obj_file.split('.obj')[0] + '_dec.obj'
         # convert mesh with vhacd
         if not osp.exists(obj_file_dec):
             p.vhacd(
@@ -438,28 +378,43 @@ class Pipeline():
             collifile=obj_file_dec,
             base_pos=pos,
             base_ori=ori)
-        p.changeDynamics(obj_id, -1, lateralFriction=0.5)
+
+        # register the object with the meshcat visualizer
+        self.viz.recorder.register_object(obj_id, obj_file_dec, scaling=mesh_scale)
 
         safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
         safeCollisionFilterPair(self.robot.arm.robot_id, self.table_id, -1, -1, enableCollision=True)
 
-        p.changeDynamics(obj_id, -1, linearDamping=5, angularDamping=5)
+        p.changeDynamics(obj_id, -1, lateralFriction=0.5, linearDamping=5, angularDamping=5)
         time.sleep(1.5)
 
-        # if self.test_obj == 'mug':
-        #     rack_color = p.getVisualShapeData(self.table_id)[rack_link_id][7]
-        #     show_link(self.table_id, rack_link_id, rack_color)
-        # return obj_id, pos, ori
-        return obj_id
-
-    def segment_pcd(self, obj_id):
-        depth_imgs = []
-        seg_idxs = []
-        obj_pcd_pts = []
-        table_pcd_pts = []
+        # depending on the object/pose type, constrain the object to its world frame pose
+        o_cid = None
+        # or (load_pose_type == 'any_pose' and pc == 'child')
+        if (obj_class in ['syn_rack_easy', 'syn_rack_hard', 'syn_rack_med', 'rack']):
+            o_cid = constraint_obj_world(obj_id, pos, ori)
+            self.robot.pb_client.set_step_sim(False)
+        self.scene_dict[obj_key]['o_cid'] = o_cid
 
         obj_pose_world = p.getBasePositionAndOrientation(obj_id)
         obj_pose_world = util.list2pose_stamped(list(obj_pose_world[0]) + list(obj_pose_world[1]))
+        return obj_id, obj_pose_world
+
+
+    def segment_scene(self, obj_ids=None):
+        depth_imgs = []
+        seg_idxs = []
+
+        pc_obs_info = {}
+        pc_obs_info['pcd'] = {}
+        pc_obs_info['pcd_pts'] = {}
+
+        if not obj_ids:
+            obj_ids = [self.scene_dict[obj_key]['obj_id'] for obj_key in self.scene_dict]
+
+        for obj_id in obj_ids:
+            pc_obs_info['pcd_pts'][obj_id] = []
+
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
             rgb, depth, seg = cam.get_images(get_rgb=True, get_depth=True, get_seg=True)
@@ -468,58 +423,66 @@ class Pipeline():
             # flatten and find corresponding pixels in segmentation mask
             flat_seg = seg.flatten()
             flat_depth = depth.flatten()
-            obj_inds = np.where(flat_seg == obj_id)
-            table_inds = np.where(flat_seg == self.table_id)
-            seg_depth = flat_depth[obj_inds[0]]  
-            
-            obj_pts = pts_raw[obj_inds[0], :]
-            obj_pcd_pts.append(util.crop_pcd(obj_pts))
 
-            table_pts = pts_raw[table_inds[0], :][::int(table_inds[0].shape[0]/500)]
-            table_pcd_pts.append(table_pts)
+            for obj_id in obj_ids:
+                obj_inds = np.where(flat_seg == obj_id)
+                seg_depth = flat_depth[obj_inds[0]]  
+                
+                obj_pts = pts_raw[obj_inds[0], :]
+                pc_obs_info['pcd_pts'][obj_id].append(util.crop_pcd(obj_pts))
 
             depth_imgs.append(seg_depth)
             seg_idxs.append(obj_inds)
 
-        target_obj_pcd_obs = np.concatenate(obj_pcd_pts, axis=0)  # object shape point cloud
-        target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
-        inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
-        target_obj_pcd_obs = target_obj_pcd_obs[inliers]
-        return target_obj_pcd_obs, obj_pose_world
+        # merge point clouds from different views, and filter weird artifacts away from the object
+        for obj_id, obj_pcd_pts in pc_obs_info['pcd_pts'].items():
+            target_obj_pcd_obs = np.concatenate(obj_pcd_pts, axis=0)  # object shape point cloud
+            target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
+            inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
+            target_obj_pcd_obs = target_obj_pcd_obs[inliers]
 
-    def load_optimizer_rndf(self, demos, n=None):
-        for pc in ['parent', 'child']:
-            for idx, demo in enumerate(demos):
-                s_pcd = demo['multi_obj_start_pcd'].item()[pc]
-                f_pcd = demo['multi_obj_final_pcd'].item()[pc]
+            #Debt: key should be obj_id not obj_key but whatever
+            for obj_key in self.scene_dict:
+                if self.scene_dict[obj_key]['obj_id'] == obj_id:
+                    self.scene_dict[obj_key]['pcd'] = target_obj_pcd_obs 
 
-                self.scene_dict[pc]['demo_start_pcds'].append(s_pcd)
-                self.scene_dict[pc]['demo_final_pcds'].append(f_pcd)
-        for pc in ['parent', 'child']:
-            self.scene_dict[pc]['demo_ids'] = [dat['multi_object_ids'].item()[pc] for dat in demos] 
-            self.scene_dict[pc]['demo_start_poses'] = [dat['multi_obj_start_obj_pose'].item()[pc] for dat in demos] 
-        model_path = osp.join(path_util.get_rndf_model_weights(), 'ndf_vnn/rndf_weights', self.args.weights)
-        
-        demo_path = osp.join(path_util.get_rndf_data(), 'targets')
-        target_desc_subdir = create_target_desc_subdir(demo_path, model_path, model_path)
-        target_desc_fname = osp.join(demo_path, model_path, target_desc_subdir, 'target_descriptors.npz')
+        with self.viz.recorder.meshcat_scene_lock:
+            for obj_key in self.scene_dict:
+                label = 'scene/%s_pcd' % obj_key
+                color = [random.randint(0,255), random.randint(0,255), random.randint(0,255)]
+                util.meshcat_pcd_show(self.viz.mc_vis, self.scene_dict[obj_key]['pcd'], color=color, name=label)
 
-    def prepare_target_descriptors(self, model_path, target_desc_fname, relation_method=None):
-        if relation_method == 'intersection':
-            if not osp.exists(target_desc_fname):
-                print(f'\n\n\nCreating target descriptors for this parent model + child model, and these demos\nSaving to {target_desc_fname}\n\n\n')
-                # n_demos = 'all' if args.n_demos < 1 else args.n_demos
+    #################################################################################################
+    # Process demos
+
+    def load_demos(self, n=None):
+        for obj_key in ['parent', 'child']:
+            self.scene_dict[obj_key]['demo_start_pcds'] = []
+            self.scene_dict[obj_key]['demo_final_pcds'] = []
+            self.scene_dict[obj_key]['demo_ids'] = []
+            self.scene_dict[obj_key]['demo_start_poses'] = []
+
+            for demo_path in self.demos:
+                demo = np.load(demo_path, allow_pickle=True)
+                s_pcd = demo['multi_obj_start_pcd'].item()[obj_key]
+                f_pcd = demo['multi_obj_final_pcd'].item()[obj_key]
+                obj_ids = demo['multi_object_ids'].item()[obj_key]
+                start_pose = demo['multi_obj_start_obj_pose'].item()[obj_key]
+
+                self.scene_dict[obj_key]['demo_start_pcds'].append(s_pcd)
+                self.scene_dict[obj_key]['demo_final_pcds'].append(f_pcd)
+                self.scene_dict[obj_key]['demo_ids'].append(obj_ids)
+                self.scene_dict[obj_key]['demo_start_poses'].append(start_pose)
                 
-                if self.test_objs[0] == 'syn_container' and self.test_objs[1] == 'bottle':
-                    use_keypoint_offset = True
-                    keypoint_offset_params = {'offset': 0.025, 'type': 'bottom'}
-                else:
-                    use_keypoint_offset = False 
-                    keypoint_offset_params = None
-                create_target_descriptors(
-                    self.model, self.model, self.scene_dict, target_desc_fname, 
-                    self.cfg, use_keypoint_offset=use_keypoint_offset, keypoint_offset_params=keypoint_offset_params,)
-       
+    def process_demos(self, relational=False):
+        if relational:            
+            # MAKE A NEW DIR FOR TARGET DESCRIPTORS
+            demo_path = osp.join(path_util.get_rndf_data(), 'targets')
+            parent_model_path, child_model_path = self.scene_dict['parent']['model_path'], self.scene_dict['child']['model_path']
+            target_desc_subdir = rndf_utils.create_target_desc_subdir(demo_path, parent_model_path, child_model_path)
+            target_desc_fname = osp.join(demo_path, target_desc_subdir, 'target_descriptors.npz')
+            self.prepare_new_descriptors(target_desc_fname)
+
         if osp.exists(target_desc_fname):
             log_info(f'Loading target descriptors from file:\n{target_desc_fname}')
             target_descriptors_data = np.load(target_desc_fname)
@@ -548,6 +511,28 @@ class Pipeline():
 
             self.scene_dict['parent']['optimizer'] = parent_optimizer
             self.scene_dict['child']['optimizer'] = child_optimizer
+
+    def prepare_new_descriptors(self, target_desc_fname):
+        # add arg for just wanting to make a new descriptor 
+        if not osp.exists(target_desc_fname):
+            print(f'\n\n\nCreating target descriptors for this parent model + child model, and these demos\nSaving to {target_desc_fname}\n\n\n')
+            # n_demos = 'all' if args.n_demos < 1 else args.n_demos
+            
+            if self.scene_dict['parent']['class'] == 'syn_container' and self.scene_dict['child']['class'] == 'bottle':
+                use_keypoint_offset = True
+                keypoint_offset_params = {'offset': 0.025, 'type': 'bottom'}
+            else:
+                use_keypoint_offset = False 
+                keypoint_offset_params = None
+
+            # bare minimum settings
+            create_target_descriptors(
+                self.scene_dict['parent']['model'], self.scene_dict['child']['model'], self.scene_dict, target_desc_fname, 
+                self.cfg, use_keypoint_offset=use_keypoint_offset, keypoint_offset_params=keypoint_offset_params, visualize=True, mc_vis=self.viz.mc_vis)
+       
+
+    #################################################################################################
+    # Optimization 
 
     def load_optimizer_ndf(self, demos, n=None):
         if n is None:
@@ -591,6 +576,8 @@ class Pipeline():
         log_info("OPTIMIZER LOADED")
         return optimizer
 
+    def find_correspondence_rndf(self):
+        pass
     def find_correspondence(self, optimizer, target_obj_pcd, obj_pose_world):
         ee_poses = []
         if self.scene_obj is None:
@@ -637,6 +624,10 @@ class Pipeline():
 
         log_info('Found correspondence')
         return ee_poses
+
+
+    #########################################################################################################
+    # Motion Planning 
 
     def pre_execution(self, obj_id, pos, ori, final_pos=None):
         if self.scene_obj is None:
@@ -685,25 +676,6 @@ class Pipeline():
         if jnt_pos is None:
             log_warn('Failed to find IK')
         return jnt_pos
-
-    # def plan_and_execute(self, poses, obj_id):
-    #     prev_pos = self.robot.arm.get_jpos()
-    #     for i, jnt_pos in enumerate(poses):
-    #         if jnt_pos is None:
-    #             log_warn('No IK for jnt', i)
-    #             break
-            
-    #         plan = self.plan_motion(prev_pos, jnt_pos)
-    #         self.execute_plan(plan)
-    #         prev_pos = jnt_pos
-
-    #         if i == 0:
-    #             # turn ON collisions between robot and object, and close fingers
-    #             for _ in range(p.getNumJoints(self.robot.arm.robot_id)):
-    #                 safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=obj_id, linkIndexA=i, linkIndexB=-1, enableCollision=True, physicsClientId=self.robot.pb_client.get_client_id())
-    #                 safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=self.table_id, linkIndexA=i, linkIndexB=self.placement_link_id, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
-            
-    #         input('Press enter to continue')
 
     def teleport_obj(self, obj_id, pose):
         safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=False)
