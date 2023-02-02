@@ -27,15 +27,14 @@ def main_teleport(pipeline):
     pipeline.prompt_query()
     pipeline.get_env_cfgs()
     pipeline.load_demos()
-    pipeline.process_demos(True)
-
-    pipeline.setup_table()
-    log_info('Loaded new table')
+    pipeline.process_demos()
 
     pipeline.setup_scene_objs()
     pipeline.segment_scene()
 
-    ee_poses = pipeline.find_correspondence_rndf()
+    relative_trans = pipeline.find_correspondence_rndf()
+    child_id = pipeline.scene_dict['child']['obj_id']
+    pipeline.teleport('child', child_id, relative_trans)
 
     # target_obj_pcd, obj_pose_world = pipeline.segment_pcd(obj_id)
     # obj_pose_world_list = util.pose_stamped2list(obj_pose_world)
@@ -63,8 +62,11 @@ if __name__ == "__main__":
     parser.add_argument('--debug', action='store_true')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--iterations', type=int, default=5)
+
     parser.add_argument('--pybullet_viz', action='store_true')
+    parser.add_argument('--opt_visualize', action='store_true')
     parser.add_argument('--grasp_viz', action='store_true')
+
     parser.add_argument('--parent_model_path', type=str, default='ndf_vnn/rndf_weights/multi_category_weights.pth')
     parser.add_argument('--child_model_path', type=str, default='ndf_vnn/rndf_weights/multi_category_weights.pth')
 
@@ -74,8 +76,20 @@ if __name__ == "__main__":
     parser.add_argument('--teleport', action='store_true')
     parser.add_argument('--opt_iterations', type=int, default=100)
 
+    parser.add_argument('--relation_method', type=str, default='intersection', help='either "intersection", "ebm"')
+
+    parser.add_argument('--pc_reference', type=str, default='parent', help='either "parent" or "child"')
+    parser.add_argument('--skip_alignment', action='store_true')
+    parser.add_argument('--new_descriptors', action='store_true')
+    parser.add_argument('--create_descriptors', action='store_true')
+    parser.add_argument('--n_demos', type=int, default=0)
+    parser.add_argument('--target_idx', type=int, default=-1)
+    parser.add_argument('--query_scale', type=float, default=0.025)
+    parser.add_argument('--target_rounds', type=int, default=3)
+
+    parser.add_argument('--add_noise', action='store_true')
+    parser.add_argument('--noise_idx', type=int, default=0)
     args = parser.parse_args()
-    # query_text = args.query_text
 
     if args.debug:
         set_log_level('debug')
@@ -95,5 +109,7 @@ if __name__ == "__main__":
     server = VizServer(pipeline.robot.pb_client)
     pipeline.register_vizServer(server)
 
+    pipeline.setup_table()
+    log_info('Loaded new table')
     for iter in range(args.iterations):
         main_teleport(pipeline)

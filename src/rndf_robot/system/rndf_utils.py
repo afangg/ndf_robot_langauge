@@ -32,8 +32,18 @@ upright_orientation_dict = {
     'container': common.euler2quat([0, 0, 0]).tolist(),
 }
 
+scale_default = {
+    'mug': 0.3, 
+    'bottle': 0.3, 
+    'bowl': 0.3,
+    'rack': 1.0,
+    'container': 1.0,
+}
 
-def create_target_desc_subdir(demo_path, parent_model_path, child_model_path):
+moveable = {'mug', 'bowl', 'bottle'}
+static = {'rack', 'mug', 'container'}
+
+def create_target_desc_subdir(demo_path, parent_model_path, child_model_path, create=False):
     parent_model_name_full = parent_model_path.split('ndf_vnn/')[-1]
     child_model_name_full = child_model_path.split('ndf_vnn/')[-1]
 
@@ -42,7 +52,8 @@ def create_target_desc_subdir(demo_path, parent_model_path, child_model_path):
     
     subdir_name = f'parent_model--{parent_model_name_specific}_child--{child_model_name_specific}'
     dirname = osp.join(demo_path, subdir_name)
-    util.safe_makedirs(dirname)
+    if create:
+        util.safe_makedirs(dirname)
     return dirname
 
 def reshape_bottle(obj_file_dec, scale, obj_class):
