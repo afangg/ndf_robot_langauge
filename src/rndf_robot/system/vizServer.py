@@ -23,12 +23,12 @@ class VizServer():
         rec_th.start()
         self.pause_mc_thread = lambda pause_bool : rec_run_event.clear() if pause_bool else rec_run_event.set()
 
-    def pb2mc_update(self, stop_event, run_event):
+    def pb2mc_update(self, mc_vis, stop_event, run_event):
         iters = 0
         # while True:
         while not stop_event.is_set():
             run_event.wait()
             iters += 1
             self.recorder.add_keyframe()
-            self.recorder.update_meshcat_current_state(self.mc_vis)
+            self.recorder.update_meshcat_current_state(mc_vis)
             time.sleep(1/230.0)

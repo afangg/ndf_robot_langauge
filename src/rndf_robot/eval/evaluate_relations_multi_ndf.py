@@ -34,7 +34,6 @@ from rndf_robot.utils.eval_gen_utils import constraint_obj_world, safeCollisionF
 
 from rndf_robot.eval.relation_tools.multi_ndf import infer_relation_intersection, create_target_descriptors
 
-
 NOISE_VALUE_LIST = [0.01, 0.02, 0.03, 0.04, 0.06, 0.08, 0.16, 0.24, 0.32, 0.4]
 
 
@@ -75,6 +74,7 @@ def main(args):
 
     signal.signal(signal.SIGINT, util.signal_handler)
 
+    # grab all demo npzs
     demo_path  = osp.join(path_util.get_rndf_data(),  args.rel_demo_exp)
     demo_files = [fn for fn in sorted(os.listdir(demo_path)) if fn.endswith('.npz')]
     demos = []
@@ -82,6 +82,7 @@ def main(args):
         demo = np.load(demo_path+'/'+f, allow_pickle=True)
         demos.append(demo)
 
+    # usually specify parent and child models explictly - directory to store descriptors is created here later
     parent_model_name_full = args.parent_model_path.split('ndf_vnn/')[-1]
     child_model_name_full = args.child_model_path.split('ndf_vnn/')[-1]
 
@@ -97,6 +98,7 @@ def main(args):
     # print(f'Parent model name specific: {parent_model_name_specific}, Child model name specific: {child_model_name_specific}')
     print(f'Parent model name specific: {parent_model_name_specific}, Child model name specific: {child_model_name_specific}, EBM name specific: {ebm_model_name_specific}')
     
+    # name experiment directory where data is stored
     expstr = f'exp--{args.exp}_demo-exp--{args.rel_demo_exp}'
     # modelstr = f'parent_model--{args.parent_model_path}_child_model--{args.child_model_path}'
     modelstr = f'parent_model--{parent_model_save_path}_child_model--{child_model_save_path}'
@@ -110,6 +112,7 @@ def main(args):
     util.safe_makedirs(eval_save_dir_root)
     util.safe_makedirs(eval_save_dir)
 
+    # start meshcat viz
     zmq_url = 'tcp://127.0.0.1:6000'
     log_warn(f'Starting meshcat at zmq_url: {zmq_url}')
     mc_vis = meshcat.Visualizer(zmq_url=zmq_url)
@@ -132,6 +135,7 @@ def main(args):
         log_info(f'Config file {config_fname} does not exist, using defaults')
     # cfg.freeze()
 
+    # experiment - save image
     eval_teleport_imgs_dir = osp.join(eval_save_dir, 'teleport_imgs')
     util.safe_makedirs(eval_teleport_imgs_dir)
 
@@ -141,6 +145,7 @@ def main(args):
     #####################################################################################
     # load in the parent/child model and the cameras
 
+    # LOAD EACH MODEL
     parent_model_path = osp.join(path_util.get_rndf_model_weights(), args.parent_model_path)
     child_model_path = osp.join(path_util.get_rndf_model_weights(), args.child_model_path)
 
@@ -159,6 +164,7 @@ def main(args):
     parent_model.load_state_dict(torch.load(parent_model_path))
     child_model.load_state_dict(torch.load(child_model_path))
 
+    # SET UP CAMERA
     cams = MultiCams(cfg.CAMERA, pb_client, n_cams=cfg.N_CAMERAS)
     cam_info = {}
     cam_info['pose_world'] = []
@@ -193,6 +199,7 @@ def main(args):
         'syn_container': common.euler2quat([0, 0, 0]).tolist(),
     }
 
+    # SAVE ALL OBJ MESHES IN A DICTIONARY
     mesh_names = {}
     for k, v in mesh_data_dirs.items():
         # get train samples
@@ -224,6 +231,16 @@ def main(args):
 
     #####################################################################################
     # load all the parent/child info
+    '''
+        1. OBJ CLASS
+        2. POSE TYPE
+        3. ALL IDs THAT CAN BE USED TO TEST
+        4. XY BOUNDS
+        5. SIZE RANGE
+        6. PATH OF THE MODEL
+        7. MODEL
+        8. START AND END OF QUERY POINTS
+    '''
 
     parent_class = args.parent_class
     child_class = args.child_class
@@ -337,9 +354,14 @@ def main(args):
     #####################################################################################
     # prepare the target descriptors 
 
+    # MAKE A WHOLE SUBDIR TO SAVE TARGET DESCRIPTORS FOR EACH DEMO?
     target_desc_subdir = create_target_desc_subdir(demo_path, parent_model_path, child_model_path)
     target_desc_fname = osp.join(demo_path, target_desc_subdir, args.target_desc_name)
+
+
+    # WE HAVE TO PROCESS THE DEMOS AND STORE THE TARGET DESCRIPTORS SOMEWHERE
     if args.relation_method == 'intersection':
+
         if not osp.exists(target_desc_fname) or args.new_descriptors:
             print(f'\n\n\nCreating target descriptors for this parent model + child model, and these demos\nSaving to {target_desc_fname}\n\n\n')
             n_demos = 'all' if args.n_demos < 1 else args.n_demos
@@ -356,6 +378,10 @@ def main(args):
             else:
                 use_keypoint_offset = False 
                 keypoint_offset_params = None
+            # import pdb ; pdb.set_trace()
+
+            print('Create target descriptors')
+            # THIS CREATES A NPZ OF THE DESCRIPTORS FOR THIS DEMO AND SAVES IT IN THE TARGET DIR
             create_target_descriptors(
                 parent_model, child_model, pc_master_dict, target_desc_fname, 
                 cfg, query_scale=args.query_scale, scale_pcds=False, 
@@ -363,8 +389,10 @@ def main(args):
                 skip_alignment=args.skip_alignment, n_demos=n_demos, manual_target_idx=args.target_idx, 
                 add_noise=add_noise, interaction_pt_noise_std=noise_value,
                 use_keypoint_offset=use_keypoint_offset, keypoint_offset_params=keypoint_offset_params,
-                visualize=True, mc_vis=mc_vis)
+                visualize=True, mc_vis=mc_vis, manual_kp_adjustment=True)
 
+
+    # GET THE NPZ WE JUST MADE AND LOAD THE DESCRIPTORS AND QUERY POINTS
     if osp.exists(target_desc_fname):
         log_info(f'Loading target descriptors from file:\n{target_desc_fname}')
         target_descriptors_data = np.load(target_desc_fname)
@@ -378,6 +406,7 @@ def main(args):
         log_info(f'Making a copy of the target descriptors in eval folder')
         shutil.copy(target_desc_fname, eval_save_dir)
 
+        # LOAD THE OPTIMIZERS WITH THE DEMOS
         parent_optimizer = OccNetOptimizer(
             parent_model,
             query_pts=parent_query_points,
@@ -408,6 +437,7 @@ def main(args):
     #####################################################################################
     # prepare the simuation environment
 
+    # LOAD AN EMPTY TABLE
     table_urdf_fname = osp.join(path_util.get_rndf_descriptions(), 'hanging/table/table_manual.urdf')
     # table_urdf_fname = osp.join(path_util.get_rndf_descriptions(), 'hanging/table/table_rack_manual.urdf')
     # table_urdf_fname = osp.join(path_util.get_rndf_descriptions(), 'hanging/table/table_rack.urdf')
@@ -417,6 +447,7 @@ def main(args):
                             scaling=1.0)
     recorder.register_object(table_id, table_urdf_fname)
 
+    # RECORD THE EVENT IN MESHCAT OR SOMETHING?
     rec_stop_event = threading.Event()
     rec_run_event = threading.Event()
     rec_th = threading.Thread(target=pb2mc_update, args=(recorder, mc_vis, rec_stop_event, rec_run_event))# , mc_vis))
@@ -458,6 +489,7 @@ def main(args):
         #####################################################################################
         # set up the trial
         
+        # CHOOSE A PARENT AND CHILD OBJECT TO TEST ON
         demo_idx = np.random.randint(len(demos))
         demo = demos[demo_idx]
         if args.test_on_train:
@@ -482,11 +514,11 @@ def main(args):
         #####################################################################################
         # load parent/child objects into the scene -- mesh file, pose, and pybullet object id
 
+        # IF IT'S SHAPENET ITS A FEW FOLDERS IN
         if is_parent_shapenet_obj:
             parent_obj_file = osp.join(mesh_data_dirs[parent_class], parent_id, 'models/model_normalized.obj')
-            print(mesh_data_dirs, parent_class, parent_id)
-            print(parent_obj_file)
             parent_obj_file_dec = parent_obj_file.split('.obj')[0] + '_dec.obj'
+        # IF IT'S NOT SHAPENET NO NESTED FOLDERS
         else:
             parent_obj_file = osp.join(mesh_data_dirs[parent_class], parent_id + '.obj')
             parent_obj_file_dec = parent_obj_file.split('.obj')[0] + '_dec.obj'
@@ -500,6 +532,8 @@ def main(args):
 
         new_parent_scale = None
         # check if bottle/container are the right sizes
+
+        # LOAD CONTAINER AND BOTTLE TO PRE-PROCESS THE SCALE
         if parent_class == 'syn_container' and child_class == 'bottle':
             if not osp.exists(parent_obj_file_dec):
                 p.vhacd(
@@ -568,6 +602,7 @@ def main(args):
             container_extents = container_box.extents
             bottle_extents = bottle_box.extents
 
+            # IF THE BOTTLE ISN'T SMALL ENOUGH THAN THE BOX IT WON'T FIT SO SCALE THE BOX UP
             if np.max(bottle_extents) > (0.75 * np.min(container_extents[:-1])):
                 # scale up the container size so that the bottle is more likely to fit inside
                 new_parent_scale = np.max(bottle_extents) * (np.random.random() * (2 - 1.5) + 1.5) / np.min(container_extents[:-1])
@@ -575,6 +610,7 @@ def main(args):
             ext_str = f'\nContainer extents: {", ".join([str(val) for val in container_extents])}, \nBottle extents: {", ".join([str(val) for val in bottle_extents])}\n'
             log_info(ext_str)
 
+        # SAVE THE MESH FILE AND DEC FILE
         for pc in pcl:
             # get the mesh files we will use
             pc_master_dict[pc]['mesh_file'] = parent_obj_file if pc == 'parent' else child_obj_file
@@ -633,6 +669,7 @@ def main(args):
                     pose_w_yaw = util.transform_pose(pose, util.pose_from_matrix(rand_yaw_T))
                     pos, ori = util.pose_stamped2list(pose_w_yaw)[:3], util.pose_stamped2list(pose_w_yaw)[3:]
 
+            # DO CONVEX DECOMP ON THE ORGINAL OBJ
             # convert mesh with vhacd
             obj_obj_file, obj_obj_file_dec = pc_master_dict[pc]['mesh_file'], pc_master_dict[pc]['mesh_file_dec']
 
@@ -686,6 +723,8 @@ def main(args):
 
             pc_master_dict[pc]['pb_obj_id'] = obj_id
 
+        # SCENE SEGMENTATION
+
         # get object point cloud
         depth_imgs = []
         seg_idxs = []
@@ -708,6 +747,7 @@ def main(args):
             flat_seg = seg.flatten()
             flat_depth = depth.flatten()
 
+            # GET SEGMENTATION FOR EACH OBJECT
             for pc in pcl:
                 obj_id = pc_master_dict[pc]['pb_obj_id']
                 obj_inds = np.where(flat_seg == obj_id)
@@ -729,6 +769,7 @@ def main(args):
             
             pc_obs_info['pcd'][pc] = target_obj_pcd_obs
 
+        # SAVE PCD FOR EACH OBJ AND VIZ IN MESHCAT
         parent_pcd = pc_obs_info['pcd']['parent']
         child_pcd = pc_obs_info['pcd']['child']
 
