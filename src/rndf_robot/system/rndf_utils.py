@@ -7,6 +7,7 @@ from rndf_robot.utils import util, path_util
 
 from rndf_robot.share.globals import bad_shapenet_mug_ids_list, bad_shapenet_bowls_ids_list, bad_shapenet_bottles_ids_list
 
+
 mesh_data_dirs = {
     'mug': 'mug_centered_obj_normalized', 
     'bottle': 'bottle_centered_obj_normalized', 
@@ -36,7 +37,7 @@ scale_default = {
     'mug': 0.3, 
     'bottle': 0.3, 
     'bowl': 0.3,
-    'rack': 1.0,
+    'rack': 0.3,
     'container': 1.0,
 }
 
@@ -55,6 +56,15 @@ def create_target_desc_subdir(demo_path, parent_model_path, child_model_path, cr
     if create:
         util.safe_makedirs(dirname)
     return dirname
+
+def get_parent_child_models(descriptor_dirname):
+    delim = '--rndf_weights--'
+    _, parent_model_path, child_model_path = descriptor_dirname.split(delim)
+    parent_model_path = parent_model_path.split('_child')[0]
+    parent_model_path = 'ndf_vnn/rndf_weights/' + parent_model_path + '.pth'
+    child_model_path = 'ndf_vnn/rndf_weights/' + child_model_path + '.pth'
+
+    return parent_model_path, child_model_path
 
 def reshape_bottle(obj_file_dec, scale, obj_class):
     mesh = trimesh.load(obj_file_dec)

@@ -214,20 +214,19 @@ class Pipeline():
             mesh_names[k] = objects_filtered
         self.obj_meshes = mesh_names
 
-    def load_models(self):
-        # LOAD EACH MODEL
-        parent_model_path = osp.join(path_util.get_rndf_model_weights(), self.args.parent_model_path)
-        child_model_path = osp.join(path_util.get_rndf_model_weights(), self.args.child_model_path)
-        parent_model = vnn_occupancy_network.VNNOccNet(latent_dim=256, model_type='pointnet', return_features=True, sigmoid=True).cuda()
-        self.scene_dict['parent']['model_path'] = parent_model_path
-        self.scene_dict['child']['model_path'] = child_model_path
+        # parent_model_path = osp.join(path_util.get_rndf_model_weights(), self.args.parent_model_path)
+        # child_model_path = osp.join(path_util.get_rndf_model_weights(), self.args.child_model_path)
+        # self.scene_dict['parent']['model_path'] = parent_model_path
+        # self.scene_dict['child']['model_path'] = child_model_path
 
-        child_model = vnn_occupancy_network.VNNOccNet(latent_dim=256, model_type='pointnet', return_features=True, sigmoid=True).cuda()
-        parent_model.load_state_dict(torch.load(parent_model_path))
-        child_model.load_state_dict(torch.load(child_model_path))
+        # parent_model = vnn_occupancy_network.VNNOccNet(latent_dim=256, model_type='pointnet', return_features=True, sigmoid=True).cuda()
+        # child_model = vnn_occupancy_network.VNNOccNet(latent_dim=256, model_type='pointnet', return_features=True, sigmoid=True).cuda()
+        
+        # parent_model.load_state_dict(torch.load(parent_model_path))
+        # child_model.load_state_dict(torch.load(child_model_path))
 
-        self.scene_dict['parent']['model'] = parent_model
-        self.scene_dict['child']['model'] = child_model
+        # self.scene_dict['parent']['model'] = parent_model
+        # self.scene_dict['child']['model'] = child_model
         
     #################################################################################################
     # Language
@@ -548,7 +547,10 @@ class Pipeline():
         if self.args.relation_method == 'intersection':
             # MAKE A NEW DIR FOR TARGET DESCRIPTORS
             demo_path = osp.join(path_util.get_rndf_data(), 'targets', self.concept)
-            parent_model_path, child_model_path = self.scene_dict['parent']['model_path'], self.scene_dict['child']['model_path']
+            parent_model_path, child_model_path = self.args.parent_model_path, self.args.child_model_path
+            self.scene_dict['parent']['model_path'] = parent_model_path
+            self.scene_dict['child']['model_path'] = child_model_path
+
             target_desc_subdir = rndf_utils.create_target_desc_subdir(demo_path, parent_model_path, child_model_path, create=False)
             target_desc_fname = osp.join(demo_path, target_desc_subdir, 'target_descriptors.npz')
         
@@ -562,43 +564,36 @@ class Pipeline():
         else:
             other_descriptors = os.listdir(demo_path)
             if len(other_descriptors):
-                target_desc_fname = osp.join(demo_path, other_descriptors[0], 'target_descriptors.npz')
+                alt_descriptor = other_descriptors[0]
+                parent_model_path, child_model_path = rndf_utils.get_parent_child_models(alt_descriptor)
+                self.scene_dict['parent']['model_path'] = parent_model_path
+                self.scene_dict['child']['model_path'] = child_model_path
+
+                target_desc_fname = osp.join(demo_path, alt_descriptor, 'target_descriptors.npz')
                 log_debug(f'Loading target descriptors from file:\n{target_desc_fname} instead')
 
                 target_descriptors_data = np.load(target_desc_fname)
             else:
                 log_warn('No descriptors for this concept, please rerun with create_descriptors flag turned on')
                 return
+        self.load_models()
 
         parent_overall_target_desc = target_descriptors_data['parent_overall_target_desc']
         child_overall_target_desc = target_descriptors_data['child_overall_target_desc']
-        parent_overall_target_desc = torch.from_numpy(parent_overall_target_desc).float().cuda()
-        child_overall_target_desc = torch.from_numpy(child_overall_target_desc).float().cuda()
-        parent_query_points = target_descriptors_data['parent_query_points']
-        child_query_points = copy.deepcopy(parent_query_points)
+        self.scene_dict['parent']['target_desc'] = torch.from_numpy(parent_overall_target_desc).float().cuda()
+        self.scene_dict['child']['target_desc'] = torch.from_numpy(child_overall_target_desc).float().cuda()
+        self.scene_dict['parent']['query_pts'] = target_descriptors_data['parent_query_points']
+        self.scene_dict['child']['query_pts'] = copy.deepcopy(target_descriptors_data['parent_query_points'])
 
-        log_debug(f'Making a copy of the target descriptors in eval folder')
 
-        parent_optimizer = OccNetOptimizer(
-            self.scene_dict['parent']['model'],
-            query_pts=parent_query_points,
-            query_pts_real_shape=parent_query_points,
-            opt_iterations=self.args.opt_iterations,
-            cfg=self.cfg.OPTIMIZER)
-
-        child_optimizer = OccNetOptimizer(
-            self.scene_dict['child']['model'],
-            query_pts=child_query_points,
-            query_pts_real_shape=child_query_points,
-            opt_iterations=self.args.opt_iterations,
-            cfg=self.cfg.OPTIMIZER)
-
-        self.scene_dict['parent']['optimizer'] = parent_optimizer
-        self.scene_dict['child']['optimizer'] = child_optimizer
-        self.scene_dict['parent']['target_desc'] = parent_overall_target_desc
-        self.scene_dict['child']['target_desc'] = child_overall_target_desc
-        self.scene_dict['parent']['query_pts'] = parent_query_points
-        self.scene_dict['child']['query_pts'] = child_query_points
+        for obj_key in ['parent', 'child']:
+            optimizer = OccNetOptimizer(
+                self.scene_dict[obj_key]['model'],
+                query_pts=self.scene_dict[obj_key]['query_pts'],
+                query_pts_real_shape=self.scene_dict[obj_key]['query_pts'],
+                opt_iterations=self.args.opt_iterations,
+                cfg=self.cfg.OPTIMIZER)
+            self.scene_dict[obj_key]['optimizer'] = optimizer
 
     def prepare_new_descriptors(self, target_desc_fname):
         log_info(f'\n\n\nCreating target descriptors for this parent model + child model, and these demos\nSaving to {target_desc_fname}\n\n\n')
@@ -611,6 +606,8 @@ class Pipeline():
             use_keypoint_offset = False 
             keypoint_offset_params = None
 
+        self.set_initial_models()
+        self.load_models()
         # bare minimum settings
         create_target_descriptors(
             self.scene_dict['parent']['model'], self.scene_dict['child']['model'], self.scene_dict, target_desc_fname, 
@@ -623,6 +620,17 @@ class Pipeline():
 
     #################################################################################################
     # Optimization 
+    def set_initial_models(self):
+        parent_model_path, child_model_path = self.args.parent_model_path, self.args.child_model_path
+        self.scene_dict['parent']['model_path'] = parent_model_path
+        self.scene_dict['child']['model_path'] = child_model_path
+
+    def load_models(self):
+        for obj_key in ['parent', 'child']:
+            model_path = osp.join(path_util.get_rndf_model_weights(), self.scene_dict[obj_key]['model_path'])
+            model = vnn_occupancy_network.VNNOccNet(latent_dim=256, model_type='pointnet', return_features=True, sigmoid=True).cuda()
+            model.load_state_dict(torch.load(model_path))
+            self.scene_dict[obj_key]['model'] = model
 
     def load_optimizer_ndf(self, demos, n=None):
         if n is None:

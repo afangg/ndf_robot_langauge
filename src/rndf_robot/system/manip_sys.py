@@ -23,7 +23,7 @@ from sentence_transformers import util as sentence_util
 
 def main_teleport(pipeline):
     # torch.manual_seed(args.seed)
-
+    pipeline.set_initial_models()
     pipeline.prompt_query()
     pipeline.get_env_cfgs()
     pipeline.load_demos()
@@ -101,7 +101,6 @@ if __name__ == "__main__":
 
     pipeline = Pipeline(args)
 
-    pipeline.load_models()
     pipeline.load_meshes_dict()
     pipeline.load_demos_dict()
     pipeline.setup_client()
