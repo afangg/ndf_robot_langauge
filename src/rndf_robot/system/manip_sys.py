@@ -23,18 +23,20 @@ from sentence_transformers import util as sentence_util
 
 def main_teleport(pipeline):
     # torch.manual_seed(args.seed)
-    pipeline.set_initial_models()
-    pipeline.prompt_query()
+    test_objs, concept = pipeline.prompt_query()
+    pipeline.assign_classes(test_objs)
+    
+    pipeline.set_initial_paths(concept)
     pipeline.get_env_cfgs()
-    pipeline.load_demos()
-    pipeline.process_demos()
 
-    pipeline.setup_scene_objs()
-    pipeline.segment_scene()
+    pipeline.load_demos(concept)
+    pipeline.load_models()
 
-    relative_trans = pipeline.find_correspondence_rndf()
-    child_id = pipeline.scene_dict['child']['obj_id']
-    pipeline.teleport('child', child_id, relative_trans)
+    ids = pipeline.setup_scene_objs()
+    pipeline.segment_scene(ids)
+
+    ee_poses = pipeline.find_correspondence()
+    pipeline.execute(ee_poses)
 
     # target_obj_pcd, obj_pose_world = pipeline.segment_pcd(obj_id)
     # obj_pose_world_list = util.pose_stamped2list(obj_pose_world)
@@ -67,14 +69,14 @@ if __name__ == "__main__":
     parser.add_argument('--opt_visualize', action='store_true')
     parser.add_argument('--grasp_viz', action='store_true')
 
-    parser.add_argument('--parent_model_path', type=str, default='ndf_vnn/rndf_weights/multi_category_weights.pth')
-    parser.add_argument('--child_model_path', type=str, default='ndf_vnn/rndf_weights/multi_category_weights.pth')
+    parser.add_argument('--parent_model_path', type=str, default='')
+    parser.add_argument('--child_model_path', type=str, default='')
 
     # parser.add_argument('--random', action='store_true', help='utilize random weights')
     parser.add_argument('--non_thin_feature', action='store_true')
     parser.add_argument('--grasp_dist_thresh', type=float, default=0.0025)
     parser.add_argument('--teleport', action='store_true')
-    parser.add_argument('--opt_iterations', type=int, default=100)
+    parser.add_argument('--opt_iterations', type=int, default=500)
 
     parser.add_argument('--relation_method', type=str, default='intersection', help='either "intersection", "ebm"')
 
@@ -109,6 +111,7 @@ if __name__ == "__main__":
     pipeline.register_vizServer(server)
 
     pipeline.setup_table()
+    pipeline.reset_robot()
     log_info('Loaded new table')
     for iter in range(args.iterations):
         main_teleport(pipeline)

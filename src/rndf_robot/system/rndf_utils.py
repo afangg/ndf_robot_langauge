@@ -77,3 +77,12 @@ def reshape_bottle(obj_file_dec, scale, obj_class):
     bbox = trimesh.PointCloud(obj_flat).bounding_box
     extents = bbox.extents
     return bbox, extents
+
+def process_relational_demo(demo, obj_key):
+    if obj_key:
+        s_pcd = demo['multi_obj_start_pcd'].item()[obj_key]
+        f_pcd = demo['multi_obj_final_pcd'].item()[obj_key]
+        obj_ids = demo['multi_object_ids'].item()[obj_key]
+        start_pose = demo['multi_obj_start_obj_pose'].item()[obj_key]
+    else:
+       pass 
