@@ -44,6 +44,24 @@ scale_default = {
 moveable = {'mug', 'bowl', 'bottle'}
 static = {'rack', 'mug', 'container'}
 
+def load_meshes_dict():
+    mesh_names = {}
+    for k, v in mesh_data_dirs.items():
+        # get train samples
+        objects_raw = os.listdir(v)
+        objects_filtered = [fn for fn in objects_raw if (fn.split('/')[-1] not in bad_ids[k] and '_dec' not in fn)]
+        # objects_filtered = objects_raw
+        total_filtered = len(objects_filtered)
+        train_n = int(total_filtered * 0.9); test_n = total_filtered - train_n
+
+        train_objects = sorted(objects_filtered)[:train_n]
+        test_objects = sorted(objects_filtered)[train_n:]
+
+        mesh_names[k] = objects_filtered
+    return mesh_names
+
+obj_meshes = load_meshes_dict()
+
 def create_target_desc_subdir(demo_path, parent_model_path, child_model_path, create=False):
     parent_model_name_full = parent_model_path.split('ndf_vnn/')[-1]
     child_model_name_full = child_model_path.split('ndf_vnn/')[-1]

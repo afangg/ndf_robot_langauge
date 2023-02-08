@@ -21,32 +21,34 @@ from airobot import Robot, log_info, set_log_level, log_warn
 from sentence_transformers import SentenceTransformer
 from sentence_transformers import util as sentence_util
 
+random = True
 def main_teleport(pipeline):
     # torch.manual_seed(args.seed)
+
+    if random and pipeline.state == -1:
+        config = dict(
+            objects={'rack': 1, 'mug': 1}
+        )
+        pipeline.setup_random_scene(config)
+
     test_objs, concept = pipeline.prompt_query()
     pipeline.assign_classes(test_objs)
+    pipeline.cfg = pipeline.get_env_cfgs()
     
     pipeline.set_initial_paths(concept)
-    pipeline.get_env_cfgs()
-
+    
     pipeline.load_demos(concept)
     pipeline.load_models()
 
-    ids = pipeline.setup_scene_objs()
+    if not random:
+        ids = pipeline.setup_scene_objs()
+    else:
+        ids = pipeline.find_relevant_objs()
+
     pipeline.segment_scene(ids)
 
     ee_poses = pipeline.find_correspondence()
     pipeline.execute(ee_poses)
-
-    # target_obj_pcd, obj_pose_world = pipeline.segment_pcd(obj_id)
-    # obj_pose_world_list = util.pose_stamped2list(obj_pose_world)
-    # pos, ori = obj_pose_world_list[:3], obj_pose_world_list[3:]
-
-    # print('Object at pose:', util.pose_stamped2list(obj_pose_world))
-    # optimizer = pipeline.load_optimizer(pipeline.demos)
-
-    # ee_poses = pipeline.find_correspondence(optimizer, target_obj_pcd, obj_pose_world)
-    # obj_end_pose_list = ee_poses[-1]
 
     # pipeline.teleport_obj(obj_id, obj_end_pose_list)
 
@@ -56,7 +58,8 @@ def main_teleport(pipeline):
     #     obj_pose=obj_pose_world,
     #     obj_id=obj_id
     # )
-    pipeline.step()
+
+    pipeline.step(ee_poses[-1])
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -103,7 +106,6 @@ if __name__ == "__main__":
 
     pipeline = Pipeline(args)
 
-    pipeline.load_meshes_dict()
     pipeline.load_demos_dict()
     pipeline.setup_client()
 
