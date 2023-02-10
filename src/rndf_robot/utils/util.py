@@ -10,6 +10,7 @@ import math
 from matplotlib import cm
 import meshcat
 import meshcat.geometry as mcg
+import trimesh
 
 class AttrDict(dict):
   __getattr__ = dict.__getitem__
@@ -203,7 +204,7 @@ def C3(theta):
 
 
 def unwrap(angles, min_val=-np.pi, max_val=np.pi):
-    if type(angles) is not 'ndarray':
+    if type(angles) != 'ndarray':
         angles = np.array(angles)
     angles_unwrapped = []
     for counter in range(angles.shape[0]):
@@ -424,6 +425,9 @@ def interpolate_pose(pose_initial, pose_final, N, frac=1):
 
 
 def transform_pose(pose_source, pose_transform):
+    '''
+    @pose_transform: a pose_msg
+    '''
     T_pose_source = matrix_from_pose(pose_source)
     T_transform_source = matrix_from_pose(pose_transform)
     T_pose_final_source = np.matmul(T_transform_source, T_pose_source)
@@ -842,6 +846,27 @@ def generate_healpix_grid(recursion_level=None, size=None):
   grid_rots_mats = np.concatenate(grid_rots_mats, 0)
   return grid_rots_mats
 
+def meshcat_obj_show(mc_vis, path, pose, scale, color=None, name=None):
+    if name is None:
+        name = 'scene/obj'
+    trimesh_mesh = trimesh.exchange.load.load(path, file_type='obj')
+    if type(trimesh_mesh) == trimesh.Scene:
+        meshes = []
+        for g in trimesh_mesh.geometry:
+            meshes.append(trimesh_mesh.geometry[g])
+        trimesh_mesh = trimesh.util.concatenate(meshes)
+    # scale_tf = trimesh.transformations.scale_matrix(scale)
+    trimesh_mesh = trimesh_mesh.apply_scale(scale)
+    trimesh_mesh.vertices -= np.mean(trimesh_mesh.vertices, 0)
+    
+    trimesh_mesh = trimesh_mesh.apply_transform(pose)
+
+    verts = trimesh_mesh.vertices
+    faces = trimesh_mesh.faces
+
+    material = meshcat.geometry.MeshLambertMaterial(color=color, reflectivity=0.0)
+    mcg_mesh = meshcat.geometry.TriangularMeshGeometry(verts, faces)
+    mc_vis[name].set_object(mcg_mesh, material)
 
 def meshcat_pcd_show(mc_vis, point_cloud, color=None, name=None):
     """
