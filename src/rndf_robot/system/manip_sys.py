@@ -6,9 +6,8 @@ import argparse
 import os, os.path as osp
 
 import sys
-
 from rndf_robot.system import vizServer
-sys.path.append('/home/afo/repos/relational_ndf/src/')
+# sys.path.append('/home/afo/repos/relational_ndf/src/')
 
 import time
 import torch
@@ -22,12 +21,12 @@ from sentence_transformers import SentenceTransformer
 from sentence_transformers import util as sentence_util
 
 random = True
-def main_teleport(pipeline):
+def main(pipeline):
     # torch.manual_seed(args.seed)
 
     if random and pipeline.state == -1:
         config = dict(
-            objects={'rack': 1, 'mug': 1}
+            objects={'container': 1, 'bottle': 1}
         )
         pipeline.setup_random_scene(config)
 
@@ -37,7 +36,7 @@ def main_teleport(pipeline):
     
     pipeline.set_initial_paths(concept)
     
-    pipeline.load_demos(concept)
+    pipeline.load_demos(concept, pipeline.args.n_demos)
     pipeline.load_models()
 
     if not random:
@@ -78,7 +77,6 @@ if __name__ == "__main__":
     # parser.add_argument('--random', action='store_true', help='utilize random weights')
     parser.add_argument('--non_thin_feature', action='store_true')
     parser.add_argument('--grasp_dist_thresh', type=float, default=0.0025)
-    parser.add_argument('--teleport', action='store_true')
     parser.add_argument('--opt_iterations', type=int, default=500)
 
     parser.add_argument('--relation_method', type=str, default='intersection', help='either "intersection", "ebm"')
@@ -87,7 +85,7 @@ if __name__ == "__main__":
     parser.add_argument('--skip_alignment', action='store_true')
     parser.add_argument('--new_descriptors', action='store_true')
     parser.add_argument('--create_descriptors', action='store_true')
-    parser.add_argument('--n_demos', type=int, default=0)
+    parser.add_argument('--n_demos', type=int, default=15)
     parser.add_argument('--target_idx', type=int, default=-1)
     parser.add_argument('--query_scale', type=float, default=0.025)
     parser.add_argument('--target_rounds', type=int, default=3)
@@ -116,4 +114,4 @@ if __name__ == "__main__":
     pipeline.reset_robot()
     log_info('Loaded new table')
     for iter in range(args.iterations):
-        main_teleport(pipeline)
+        main(pipeline)

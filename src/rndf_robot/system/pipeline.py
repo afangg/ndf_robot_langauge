@@ -6,7 +6,9 @@ import torch
 import argparse
 import time
 import sys
-sys.path.append('/home/afo/repos/relational_ndf/src/')
+print(sys.path)
+
+sys.path.append('/home/afo/repos/ndf_robot_language/src/')
 import pybullet as p
 import trimesh
 import rndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_network
@@ -48,8 +50,10 @@ def show_link(obj_id, link_id, color):
     if link_id is not None:
         p.changeVisualShape(obj_id, link_id, rgbaColor=color)
 
-def choose_obj(obj_class):
-    shapenet_id = random.sample(rndf_utils.obj_meshes[obj_class], 1)[0]
+def choose_obj(meshes_dic, obj_class):
+    shapenet_id = random.sample(meshes_dic[obj_class], 1)[0]
+    if obj_class == 'container':
+        shapenet_id = 'syn_container_15'
     log_debug('Loading %s shape: %s' % (obj_class, shapenet_id))
     if obj_class in ['bottle', 'bowl', 'mug']:
         return osp.join(rndf_utils.mesh_data_dirs[obj_class], shapenet_id, 'models/model_normalized.obj')
@@ -75,7 +79,7 @@ class Pipeline():
         self.table_obj = -1 #shelf = 0, rack = 1
 
         self.cfg = get_eval_cfg_defaults()
-        print(self.cfg is None)
+        self.meshes_dic = rndf_utils.load_meshes_dict(self.cfg)
 
         random.seed(self.args.seed)
         np.random.seed(self.args.seed)
@@ -108,7 +112,7 @@ class Pipeline():
                 self.robot.arm.eetool.open()
 
                 self.last_ee = None
-                self.scene_dict['child'] = {}
+                self.scene_dict = dict(child={})
                 self.state = -1
                 time.sleep(1.5)
                 break
@@ -177,7 +181,6 @@ class Pipeline():
         self.all_scene_objs = {}
         ids = set()
         for obj_class, n in config_dict['objects'].items():
-            print(obj_class, n)
             self.all_scene_objs[obj_class] = []
 
             for _ in range(n):
@@ -188,19 +191,16 @@ class Pipeline():
                     o_cid=o_cid
                 )
                 self.all_scene_objs[obj_class].append(obj)
-                for id in ids:
-                    for other_id in ids:
-                        safeCollisionFilterPair(obj_id, other_id, -1, -1, enableCollision=True)
-                ids.add(obj_id)
 
 
     def add_obj(self, obj_class, scale_default=None):
-        obj_file = choose_obj(obj_class)
-        print(self.cfg is None)
+        obj_file = choose_obj(self.meshes_dic, obj_class)
         x_low, x_high = self.cfg.OBJ_SAMPLE_X_HIGH_LOW
         y_low, y_high = self.cfg.OBJ_SAMPLE_Y_HIGH_LOW
         # if obj_key == 'parent':
         #     y_high = -0.2
+        # if obj_class == 'bottle':
+        #     x_low -= 0.1
 
         self.placement_link_id = 0 
 
@@ -212,21 +212,22 @@ class Pipeline():
         for obj_class in self.all_scene_objs:
             for obj in self.all_scene_objs[obj_class]:
                 existing_pos = util.pose_stamped2list(obj['pose'])
+
                 if abs(pos[0]-existing_pos[0]) < self.cfg.OBJ_SAMPLE_PLACE_X_DIST:
-                    if pos[0] + self.cfg.OBJ_SAMPLE_PLACE_X_DIST > x_high:
-                        pos[0] -= self.cfg.OBJ_SAMPLE_PLACE_X_DIST 
+                    if abs(pos[0]+self.cfg.OBJ_SAMPLE_PLACE_X_DIST-existing_pos[0]) > abs(pos[0]-self.cfg.OBJ_SAMPLE_PLACE_X_DIST-existing_pos[0]):
+                        pos[0] += self.cfg.OBJ_SAMPLE_PLACE_X_DIST 
                     else:
-                        pos[0] += self.cfg.OBJ_SAMPLE_PLACE_X_DIST                         
+                        pos[0] -= self.cfg.OBJ_SAMPLE_PLACE_X_DIST                         
                     log_debug('obj too close, moved x')
                     continue
 
                 if abs(pos[1]-existing_pos[1]) < self.cfg.OBJ_SAMPLE_PLACE_Y_DIST:
-                    if pos[1] + self.cfg.OBJ_SAMPLE_PLACE_Y_DIST > y_high:
-                        pos[1] -= self.cfg.OBJ_SAMPLE_PLACE_Y_DIST 
-                    else:
+                    if abs(pos[1]+self.cfg.OBJ_SAMPLE_PLACE_Y_DIST-existing_pos[1]) > abs(pos[1]-self.cfg.OBJ_SAMPLE_PLACE_Y_DIST-existing_pos[1]):
                         pos[1] += self.cfg.OBJ_SAMPLE_PLACE_Y_DIST 
+                    else:
+                        pos[1] -= self.cfg.OBJ_SAMPLE_PLACE_Y_DIST                         
+                    log_debug('obj too close, moved Y')
 
-                    log_debug('obj too close, moved y')
             log_debug('new: %s' %pos)
 
         if self.random_pos:
@@ -243,9 +244,10 @@ class Pipeline():
         rand_yaw_T = util.rand_body_yaw_transform(pos, min_theta=-np.pi, max_theta=np.pi)
         pose_w_yaw = util.transform_pose(pose, util.pose_from_matrix(rand_yaw_T))
         pos, ori = util.pose_stamped2list(pose_w_yaw)[:3], util.pose_stamped2list(pose_w_yaw)[3:]
-        print('OBJECT POSE:', util.pose_stamped2list(pose))
+        log_debug('OBJECT POSE: %s'% util.pose_stamped2list(pose))
 
         obj_file_dec = obj_file.split('.obj')[0] + '_dec.obj'
+        print(obj_file_dec, 'exists:', osp.exists(obj_file_dec))
 
         # convert mesh with vhacd
         if not osp.exists(obj_file_dec):
@@ -284,7 +286,7 @@ class Pipeline():
 
         safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
         # safeCollisionFilterPair(self.robot.arm.robot_id, self.table_id, -1, -1, enableCollision=True)
-        safeCollisionFilterPair(self.robot.arm.robot_id, obj_id, -1, -1, enableCollision=True)
+        # safeCollisionFilterPair(self.robot.arm.robot_id, obj_id, -1, -1, enableCollision=True)
 
         p.changeDynamics(obj_id, -1, lateralFriction=0.5, linearDamping=5, angularDamping=5)
 
@@ -302,7 +304,6 @@ class Pipeline():
         with self.viz.recorder.meshcat_scene_lock:
             pose = util.matrix_from_pose(obj_pose_world)
             util.meshcat_obj_show(self.viz.mc_vis, obj_file_dec, pose, mesh_scale, name='scene/%s'%obj_class)
-            # util.meshcat_pcd_show(self.viz.mc_vis, pcd, color=[255, 0, 255], name='scene/%s'%obj_class)
         return obj_id, obj_pose_world, o_cid
 
     #################################################################################################
@@ -420,8 +421,8 @@ class Pipeline():
             sorted_scores, idx = sorted_scores.flatten(), idx.flatten()
             corresponding_concept = None
             for i in range(n):
-                print('Best matches:', concepts[idx[i]])
-                query_text = input('Corrent? (y/n)\n')
+                print('Corresponding concept:', concepts[idx[i]])
+                query_text = input('Corrent concept? (y/n)\n')
                 if query_text == 'n':
                     continue
                 elif query_text == 'y':
@@ -483,8 +484,8 @@ class Pipeline():
             self.scene_dict[obj_key]['o_cid'] = o_cid
             ids.append(obj_id)
         
-        if 'parent' in self.scene_dict:
-            safeCollisionFilterPair(self.scene_dict['parent']['obj_id'], self.scene_dict['child']['obj_id'], -1, -1, enableCollision=True)
+        # if 'parent' in self.scene_dict:
+        #     safeCollisionFilterPair(self.scene_dict['parent']['obj_id'], self.scene_dict['child']['obj_id'], -1, -1, enableCollision=True)
         return ids
 
     def find_relevant_objs(self):
@@ -496,7 +497,8 @@ class Pipeline():
                 obj = self.all_scene_objs[obj_class][0]
             else:
                 #generate the objects
-                pass
+                log_warn('NO RELEVANT OBJECT IN THE SCENE. EXITING')
+                return
             self.scene_dict[obj_key]['obj_id'] = obj['obj_id']
             self.scene_dict[obj_key]['pose'] = obj['pose']
             self.scene_dict[obj_key]['o_cid'] = obj['o_cid']
@@ -525,7 +527,6 @@ class Pipeline():
                 mode=0,
                 convexhullApproximation=1
             )
-            print('created dec')
         
         mesh = trimesh.load(obj_file_dec)
         mesh.apply_scale(self.scene_dict[obj_key]['scale_default'])
@@ -542,98 +543,94 @@ class Pipeline():
         obj_bbox = trimesh.PointCloud(flat).bounding_box
         return obj_bbox.extents
 
-    def add_test_objs(self, obj_key):
-        obj_class, obj_file = self.scene_dict[obj_key]['class'], self.scene_dict[obj_key]['file_path']
-        x_low, x_high = self.cfg.OBJ_SAMPLE_X_HIGH_LOW
-        y_low, y_high = self.cfg.OBJ_SAMPLE_Y_HIGH_LOW
-        if obj_key == 'parent':
-            y_high = -0.2
+    # def add_test_objs(self, obj_key):
+    #     obj_class, obj_file = self.scene_dict[obj_key]['class'], self.scene_dict[obj_key]['file_path']
+    #     x_low, x_high = self.cfg.OBJ_SAMPLE_X_HIGH_LOW
+    #     y_low, y_high = self.cfg.OBJ_SAMPLE_Y_HIGH_LOW
+    #     if obj_key == 'parent':
+    #         y_high = -0.2
 
-        self.placement_link_id = 0 
-        upright_orientation = rndf_utils.upright_orientation_dict[obj_class]
+    #     self.placement_link_id = 0 
+    #     upright_orientation = rndf_utils.upright_orientation_dict[obj_class]
 
-        scale_default = self.scene_dict[obj_key]['scale_default']
-        mesh_scale=[scale_default] * 3
-        if self.random_pos:
-            if self.test_obj in ['bowl', 'bottle']:
-                rp = np.random.rand(2) * (2 * np.pi / 3) - (np.pi / 3)
-                ori = common.euler2quat([rp[0], rp[1], 0]).tolist()
-            else:
-                rpy = np.random.rand(3) * (2 * np.pi / 3) - (np.pi / 3)
-                ori = common.euler2quat([rpy[0], rpy[1], rpy[2]]).tolist()
-            pos = [
-                np.random.random() * (x_high - x_low) + x_low,
-                np.random.random() * (y_high - y_low) + y_low,
-                self.cfg.TABLE_Z]
-            pose = pos + ori
-            rand_yaw_T = util.rand_body_yaw_transform(pos, min_theta=-np.pi, max_theta=np.pi)
-            pose_w_yaw = util.transform_pose(util.list2pose_stamped(pose), util.pose_from_matrix(rand_yaw_T))
-            pos, ori = util.pose_stamped2list(pose_w_yaw)[:3], util.pose_stamped2list(pose_w_yaw)[3:]
+    #     scale_default = self.scene_dict[obj_key]['scale_default']
+    #     mesh_scale=[scale_default] * 3
+    #     if self.random_pos:
+    #         if self.test_obj in ['bowl', 'bottle']:
+    #             rp = np.random.rand(2) * (2 * np.pi / 3) - (np.pi / 3)
+    #             ori = common.euler2quat([rp[0], rp[1], 0]).tolist()
+    #         else:
+    #             rpy = np.random.rand(3) * (2 * np.pi / 3) - (np.pi / 3)
+    #             ori = common.euler2quat([rpy[0], rpy[1], rpy[2]]).tolist()
+    #         pos = [
+    #             np.random.random() * (x_high - x_low) + x_low,
+    #             np.random.random() * (y_high - y_low) + y_low,
+    #             self.cfg.TABLE_Z]
+    #         pose = pos + ori
+    #         rand_yaw_T = util.rand_body_yaw_transform(pos, min_theta=-np.pi, max_theta=np.pi)
+    #         pose_w_yaw = util.transform_pose(util.list2pose_stamped(pose), util.pose_from_matrix(rand_yaw_T))
+    #         pos, ori = util.pose_stamped2list(pose_w_yaw)[:3], util.pose_stamped2list(pose_w_yaw)[3:]
 
-        else:
-            pos = [np.random.random() * (x_high - x_low) + x_low, np.random.random() * (y_high - y_low) + y_low, self.cfg.TABLE_Z]
-            pose = util.list2pose_stamped(pos + upright_orientation)
-            rand_yaw_T = util.rand_body_yaw_transform(pos, min_theta=-np.pi, max_theta=np.pi)
-            pose_w_yaw = util.transform_pose(pose, util.pose_from_matrix(rand_yaw_T))
-            pos, ori = util.pose_stamped2list(pose_w_yaw)[:3], util.pose_stamped2list(pose_w_yaw)[3:]
-        print('OBJECT POSE:', util.pose_stamped2list(pose))
+    #     else:
+    #         pos = [np.random.random() * (x_high - x_low) + x_low, np.random.random() * (y_high - y_low) + y_low, self.cfg.TABLE_Z]
+    #         pose = util.list2pose_stamped(pos + upright_orientation)
+    #         rand_yaw_T = util.rand_body_yaw_transform(pos, min_theta=-np.pi, max_theta=np.pi)
+    #         pose_w_yaw = util.transform_pose(pose, util.pose_from_matrix(rand_yaw_T))
+    #         pos, ori = util.pose_stamped2list(pose_w_yaw)[:3], util.pose_stamped2list(pose_w_yaw)[3:]
+    #     print('OBJECT POSE:', util.pose_stamped2list(pose))
 
-        obj_file_dec = obj_file.split('.obj')[0] + '_dec.obj'
+    #     obj_file_dec = obj_file.split('.obj')[0] + '_dec.obj'
 
-        # convert mesh with vhacd
-        if not osp.exists(obj_file_dec):
-            p.vhacd(
-                obj_file,
-                obj_file_dec,
-                'log.txt',
-                concavity=0.0025,
-                alpha=0.04,
-                beta=0.05,
-                gamma=0.00125,
-                minVolumePerCH=0.0001,
-                resolution=1000000,
-                depth=20,
-                planeDownsampling=4,
-                convexhullDownsampling=4,
-                pca=0,
-                mode=0,
-                convexhullApproximation=1
-            )
+    #     # convert mesh with vhacd
+    #     if not osp.exists(obj_file_dec):
+    #         p.vhacd(
+    #             obj_file,
+    #             obj_file_dec,
+    #             'log.txt',
+    #             concavity=0.0025,
+    #             alpha=0.04,
+    #             beta=0.05,
+    #             gamma=0.00125,
+    #             minVolumePerCH=0.0001,
+    #             resolution=1000000,
+    #             depth=20,
+    #             planeDownsampling=4,
+    #             convexhullDownsampling=4,
+    #             pca=0,
+    #             mode=0,
+    #             convexhullApproximation=1
+    #         )
 
-        obj_id = self.robot.pb_client.load_geom(
-            'mesh',
-            mass=0.01,
-            mesh_scale=mesh_scale,
-            visualfile=obj_file_dec,
-            collifile=obj_file_dec,
-            base_pos=pos,
-            base_ori=ori)
+    #     obj_id = self.robot.pb_client.load_geom(
+    #         'mesh',
+    #         mass=0.01,
+    #         mesh_scale=mesh_scale,
+    #         visualfile=obj_file_dec,
+    #         collifile=obj_file_dec,
+    #         base_pos=pos,
+    #         base_ori=ori)
 
-        # register the object with the meshcat visualizer
-        self.viz.recorder.register_object(obj_id, obj_file_dec, scaling=mesh_scale)
-        # safeCollisionFilterPair(bodyUniqueIdA=obj_id, bodyUniqueIdB=self.table_id, linkIndexA=-1, linkIndexB=0, enableCollision=False)
-        # safeCollisionFilterPair(self.robot.arm.robot_id, self.table_id, -1, -1, enableCollision=True)
+    #     # register the object with the meshcat visualizer
+    #     self.viz.recorder.register_object(obj_id, obj_file_dec, scaling=mesh_scale)
+    #     safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
+    #     safeCollisionFilterPair(self.robot.arm.robot_id, self.table_id, -1, -1, enableCollision=True)
 
-        safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
-        safeCollisionFilterPair(self.robot.arm.robot_id, self.table_id, -1, -1, enableCollision=True)
+    #     p.changeDynamics(obj_id, -1, lateralFriction=0.5, linearDamping=5, angularDamping=5)
 
-        p.changeDynamics(obj_id, -1, lateralFriction=0.5, linearDamping=5, angularDamping=5)
+    #     # depending on the object/pose type, constrain the object to its world frame pose
+    #     o_cid = None
+    #     # or (load_pose_type == 'any_pose' and pc == 'child')
+    #     if (obj_class in ['syn_rack_easy', 'syn_rack_hard', 'syn_rack_med', 'rack']):
+    #         o_cid = constraint_obj_world(obj_id, pos, ori)
+    #         self.robot.pb_client.set_step_sim(False)
 
-        # depending on the object/pose type, constrain the object to its world frame pose
-        o_cid = None
-        # or (load_pose_type == 'any_pose' and pc == 'child')
-        if (obj_class in ['syn_rack_easy', 'syn_rack_hard', 'syn_rack_med', 'rack']):
-            o_cid = constraint_obj_world(obj_id, pos, ori)
-            self.robot.pb_client.set_step_sim(False)
+    #     self.scene_dict[obj_key]['o_cid'] = o_cid
 
-        self.scene_dict[obj_key]['o_cid'] = o_cid
+    #     time.sleep(1.5)
 
-        time.sleep(1.5)
-
-        obj_pose_world = p.getBasePositionAndOrientation(obj_id)
-        obj_pose_world = util.list2pose_stamped(list(obj_pose_world[0]) + list(obj_pose_world[1]))
-        input('Press enter to continue')
-        return obj_id, obj_pose_world
+    #     obj_pose_world = p.getBasePositionAndOrientation(obj_id)
+    #     obj_pose_world = util.list2pose_stamped(list(obj_pose_world[0]) + list(obj_pose_world[1]))
+    #     return obj_id, obj_pose_world
 
     def segment_scene(self, obj_ids=None):
         depth_imgs = []
@@ -693,9 +690,9 @@ class Pipeline():
 
     def load_demos(self, concept, n=None):
         if 'parent' in self.scene_dict:
-            self.get_relational_descriptors(concept)
+            self.get_relational_descriptors(concept, n)
         else:
-            self.get_single_descriptors()
+            self.get_single_descriptors(n)
 
     def get_single_descriptors(self, n=None):
         self.scene_dict['child']['demo_info'] = []
@@ -704,8 +701,10 @@ class Pipeline():
         if self.state == 0:
             self.scene_dict['child']['demo_start_poses'] = []
 
-        for fname in self.demos:
+        for fname in self.demos[:min(n, len(self.demos))]:
             demo = np.load(fname, allow_pickle=True)
+            if 'shapenet_id' not in demo:
+                continue
             obj_id = demo['shapenet_id'].item()
 
             if self.state == 0:
@@ -740,7 +739,7 @@ class Pipeline():
             self.scene_dict[obj_key]['demo_start_poses'] = []
 
         for obj_key in ['child', 'parent']:
-            for demo_path in self.demos:
+            for demo_path in self.demos[:min(n, len(self.demos))]:
                 demo = np.load(demo_path, allow_pickle=True)
                 s_pcd = demo['multi_obj_start_pcd'].item()[obj_key]
                 f_pcd = demo['multi_obj_final_pcd'].item()[obj_key]
@@ -752,7 +751,7 @@ class Pipeline():
                 self.scene_dict[obj_key]['demo_ids'].append(obj_ids)
                 self.scene_dict[obj_key]['demo_start_poses'].append(start_pose)
                 
-        demo_path = osp.join(path_util.get_rndf_data(), 'targets', concept)
+        demo_path = osp.join(path_util.get_rndf_data(), 'release_demos', concept)
         parent_model_path, child_model_path = self.scene_dict['parent']['model_path'], self.scene_dict['child']['model_path']
         target_desc_subdir = rndf_utils.create_target_desc_subdir(demo_path, parent_model_path, child_model_path, create=False)
         target_desc_fname = osp.join(demo_path, target_desc_subdir, 'target_descriptors.npz')
@@ -819,13 +818,16 @@ class Pipeline():
             if not parent_model_path:
                 parent_model_path = 'ndf_vnn/rndf_weights/ndf_'+self.scene_dict['parent']['class']+'.pth'
 
-            demo_path = osp.join(path_util.get_rndf_data(), 'targets', concept)
+            demo_path = osp.join(path_util.get_rndf_data(), 'release_demos', concept)
             target_desc_subdir = rndf_utils.create_target_desc_subdir(demo_path, parent_model_path, child_model_path, create=False)
             target_desc_fname = osp.join(demo_path, target_desc_subdir, 'target_descriptors.npz')
             if not osp.exists(target_desc_fname):
                 alt_descs = os.listdir(demo_path)
                 assert len(alt_descs) > 0, 'There are no descriptors for this concept. Please generate descriptors first'
-                parent_model_path, child_model_path = rndf_utils.get_parent_child_models(alt_descs[0])
+                for alt_desc in alt_descs:
+                    if not alt_desc.endswith('.npz'):
+                        parent_model_path, child_model_path = rndf_utils.get_parent_child_models(alt_desc)
+                        break
                 log_warn('Using the first set of descriptors found because descriptors not specified')
 
             # if parent_model_path is None and child_model_path is None:
@@ -973,40 +975,27 @@ class Pipeline():
             time.sleep(1.0)
 
     def pre_execution(self, obj_id):
-        input('Press enter to continue')
         if self.state == 0:
-            # reset everything
-            self.robot.pb_client.set_step_sim(False)
             time.sleep(0.5)
-
             # turn OFF collisions between robot and object / table, and move to pre-grasp pose
             for i in range(p.getNumJoints(self.robot.arm.robot_id)):
                 safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=self.table_id, linkIndexA=i, linkIndexB=-1, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
                 safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=obj_id, linkIndexA=i, linkIndexB=-1, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
             self.robot.arm.eetool.open()
-            time.sleep(0.25)
-
+            time.sleep(0.5)
         else:
-            # # reset object to placement pose to detect placement success
-            # safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=False)
-            # safeCollisionFilterPair(obj_id, self.table_id, -1, self.placement_link_id, enableCollision=False)
-            # self.robot.pb_client.set_step_sim(True)
-            # self.robot.pb_client.reset_body(obj_id, final_pos[:3], final_pos[3:])
-
-            # time.sleep(0.2)
-            # safeCollisionFilterPair(obj_id, self.table_id, -1, self.placement_link_id, enableCollision=True)
-            # self.robot.pb_client.set_step_sim(False)
-            # time.sleep(0.2)
-
-            # safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
-            # self.robot.pb_client.reset_body(obj_id, pos, ori)
-            pass
+            # all_ids = []
+            # for _, obj_ids in self.all_scene_objs.items():
+            #     all_ids.extend(obj_ids)
+            
+            # for obj in all_ids:
+            #     for other_obj in all_ids:
+            #         if obj != other_obj:
+            #             print(obj['obj_id'], other_obj['obj_id'])
+            #             safeCollisionFilterPair(obj['obj_id'], other_obj['obj_id'], -1, -1, enableCollision=True)
+            safeCollisionFilterPair(self.scene_dict['parent']['obj_id'], self.scene_dict['child']['obj_id'], -1, -1, enableCollision=True)
 
     def get_iks(self, ee_poses):
-        # jnt_poses = [None]*len(ee_poses)
-        # for i, pose in enumerate(ee_poses):
-        #     log_info('Attempt to find IK %i' % i)
-        #     jnt_poses[i] = self.cascade_ik(pose)
         return [self.cascade_ik(pose) for pose in ee_poses]
     
     def cascade_ik(self, ee_pose):
@@ -1040,9 +1029,8 @@ class Pipeline():
         with self.viz.recorder.meshcat_scene_lock:
             util.meshcat_pcd_show(self.viz.mc_vis, final_child_pcd, color=[255, 0, 255], name='scene/child_pcd')
 
-        # safeCollisionFilterPair(pc_master_dict['child']['pb_obj_id'], table_id, -1, -1, enableCollision=False)
         safeCollisionFilterPair(obj_id, self.table_id, -1, 0, enableCollision=False)
-        time.sleep(10.0)
+        time.sleep(5.0)
         # turn on the physics and let things settle to evaluate success/failure
         self.robot.pb_client.set_step_sim(False)
 
@@ -1092,6 +1080,9 @@ class Pipeline():
                 p.changeDynamics(obj_id, -1, linearDamping=5, angularDamping=5)
                 # constraint_grasp_open(self.o_cid)
                 self.robot.arm.eetool.open()
+                grasp_success = object_is_still_grasped(self.robot, obj_id, self.right_pad_id, self.left_pad_id) 
+                if not grasp_success:
+                    self.state = -1
 
                 time.sleep(0.2)
                 for i in range(p.getNumJoints(self.robot.arm.robot_id)):

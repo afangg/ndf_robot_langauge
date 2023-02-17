@@ -272,7 +272,7 @@ def post_process_grasp_point(ee_pose, target_obj_pcd, thin_feature=True, grasp_v
 
         ee_mesh = trimesh.load(gripper_fname)
         scene.add_geometry([ee_mesh], transform=ee_pose_mat)
-        marker = trimesh.creation.axis(origin=0.01, transform=util.matrix_from_pose(util.list2pose_stamped(ee_pose)))
+        marker = trimesh.creation.axis(origin_size=0.01, transform=util.matrix_from_pose(util.list2pose_stamped(ee_pose)))
         scene.add_geometry([ee_mesh], transform=ee_pose_mat)
         scene.add_geometry([marker])
         print('END EFFECTOR POSE:', ee_pose_mat)
@@ -285,7 +285,7 @@ def get_ee_offset(ee_pose):
     """
     Gets the updated world frame normal direction of the palms
     """
-    dist = 0.15
+    dist = 0.1
     normal_x = util.list2pose_stamped([dist, 0, 0, 0, 0, 0, 1])
     normal_y = util.list2pose_stamped([0, dist, 0, 0, 0, 0, 1])
     normal_z = util.list2pose_stamped([0, 0, dist, 0, 0, 0, 1])
