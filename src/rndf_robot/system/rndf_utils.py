@@ -37,19 +37,28 @@ scale_default = {
     'mug': 0.3, 
     'bottle': 0.3, 
     'bowl': 0.3,
-    'rack': 0.3,
+    'rack': 1.0,
     'container': 1.0,
 }
 
 moveable = {'mug', 'bowl', 'bottle'}
 static = {'rack', 'mug', 'container'}
 
-def load_meshes_dict():
+def load_meshes_dict(cfg):
     mesh_names = {}
     for k, v in mesh_data_dirs.items():
         # get train samples
         objects_raw = os.listdir(v)
-        objects_filtered = [fn for fn in objects_raw if (fn.split('/')[-1] not in bad_ids[k] and '_dec' not in fn)]
+        avoid_ids = bad_ids[k]
+        if k == 'mug':
+            avoid_ids += cfg.MUG.AVOID_SHAPENET_IDS
+        elif k == 'bowl':
+            avoid_ids += cfg.BOWL.AVOID_SHAPENET_IDS
+        elif k == 'bottle':
+            avoid_ids += cfg.BOTTLE.AVOID_SHAPENET_IDS
+        else:
+            pass
+        objects_filtered = [fn for fn in objects_raw if (fn.split('/')[-1] not in avoid_ids and '_dec' not in fn)]
         # objects_filtered = objects_raw
         total_filtered = len(objects_filtered)
         train_n = int(total_filtered * 0.9); test_n = total_filtered - train_n
@@ -59,8 +68,6 @@ def load_meshes_dict():
 
         mesh_names[k] = objects_filtered
     return mesh_names
-
-obj_meshes = load_meshes_dict()
 
 def create_target_desc_subdir(demo_path, parent_model_path, child_model_path, create=False):
     parent_model_name_full = parent_model_path.split('ndf_vnn/')[-1]
