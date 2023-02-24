@@ -52,8 +52,6 @@ def show_link(obj_id, link_id, color):
 
 def choose_obj(meshes_dic, obj_class):
     shapenet_id = random.sample(meshes_dic[obj_class], 1)[0]
-    if obj_class == 'container':
-        shapenet_id = 'syn_container_15'
     log_debug('Loading %s shape: %s' % (obj_class, shapenet_id))
     if obj_class in ['bottle', 'bowl', 'mug']:
         return osp.join(rndf_utils.mesh_data_dirs[obj_class], shapenet_id, 'models/model_normalized.obj')
