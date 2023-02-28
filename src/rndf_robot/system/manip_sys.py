@@ -26,7 +26,7 @@ def main(pipeline):
 
     if random and pipeline.state == -1:
         config = dict(
-            objects={'container': 1, 'bottle': 1}
+            objects={'bottle': 1, 'mug': 1}
         )
         pipeline.setup_random_scene(config)
 
@@ -44,7 +44,7 @@ def main(pipeline):
     else:
         ids = pipeline.find_relevant_objs()
 
-    pipeline.segment_scene(ids)
+    pipeline.segment_scene(ids, sim_seg=True)
 
     ee_poses = pipeline.find_correspondence()
     pipeline.execute(ee_poses)

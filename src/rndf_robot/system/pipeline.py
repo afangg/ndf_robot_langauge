@@ -36,6 +36,7 @@ from ndf_robot.utils.pipeline_util import (
     constraint_grasp_open
 )
 from rndf_robot.eval.relation_tools.multi_ndf import infer_relation_intersection, create_target_descriptors
+from rndf_robot.system.segmentation import detect_bbs, get_largest_pcd, get_region
 
 from airobot import Robot, log_info, set_log_level, log_warn, log_debug
 from airobot.utils import common
@@ -195,10 +196,6 @@ class Pipeline():
         obj_file = choose_obj(self.meshes_dic, obj_class)
         x_low, x_high = self.cfg.OBJ_SAMPLE_X_HIGH_LOW
         y_low, y_high = self.cfg.OBJ_SAMPLE_Y_HIGH_LOW
-        # if obj_key == 'parent':
-        #     y_high = -0.2
-        # if obj_class == 'bottle':
-        #     x_low -= 0.1
 
         self.placement_link_id = 0 
 
@@ -541,134 +538,61 @@ class Pipeline():
         obj_bbox = trimesh.PointCloud(flat).bounding_box
         return obj_bbox.extents
 
-    # def add_test_objs(self, obj_key):
-    #     obj_class, obj_file = self.scene_dict[obj_key]['class'], self.scene_dict[obj_key]['file_path']
-    #     x_low, x_high = self.cfg.OBJ_SAMPLE_X_HIGH_LOW
-    #     y_low, y_high = self.cfg.OBJ_SAMPLE_Y_HIGH_LOW
-    #     if obj_key == 'parent':
-    #         y_high = -0.2
-
-    #     self.placement_link_id = 0 
-    #     upright_orientation = rndf_utils.upright_orientation_dict[obj_class]
-
-    #     scale_default = self.scene_dict[obj_key]['scale_default']
-    #     mesh_scale=[scale_default] * 3
-    #     if self.random_pos:
-    #         if self.test_obj in ['bowl', 'bottle']:
-    #             rp = np.random.rand(2) * (2 * np.pi / 3) - (np.pi / 3)
-    #             ori = common.euler2quat([rp[0], rp[1], 0]).tolist()
-    #         else:
-    #             rpy = np.random.rand(3) * (2 * np.pi / 3) - (np.pi / 3)
-    #             ori = common.euler2quat([rpy[0], rpy[1], rpy[2]]).tolist()
-    #         pos = [
-    #             np.random.random() * (x_high - x_low) + x_low,
-    #             np.random.random() * (y_high - y_low) + y_low,
-    #             self.cfg.TABLE_Z]
-    #         pose = pos + ori
-    #         rand_yaw_T = util.rand_body_yaw_transform(pos, min_theta=-np.pi, max_theta=np.pi)
-    #         pose_w_yaw = util.transform_pose(util.list2pose_stamped(pose), util.pose_from_matrix(rand_yaw_T))
-    #         pos, ori = util.pose_stamped2list(pose_w_yaw)[:3], util.pose_stamped2list(pose_w_yaw)[3:]
-
-    #     else:
-    #         pos = [np.random.random() * (x_high - x_low) + x_low, np.random.random() * (y_high - y_low) + y_low, self.cfg.TABLE_Z]
-    #         pose = util.list2pose_stamped(pos + upright_orientation)
-    #         rand_yaw_T = util.rand_body_yaw_transform(pos, min_theta=-np.pi, max_theta=np.pi)
-    #         pose_w_yaw = util.transform_pose(pose, util.pose_from_matrix(rand_yaw_T))
-    #         pos, ori = util.pose_stamped2list(pose_w_yaw)[:3], util.pose_stamped2list(pose_w_yaw)[3:]
-    #     print('OBJECT POSE:', util.pose_stamped2list(pose))
-
-    #     obj_file_dec = obj_file.split('.obj')[0] + '_dec.obj'
-
-    #     # convert mesh with vhacd
-    #     if not osp.exists(obj_file_dec):
-    #         p.vhacd(
-    #             obj_file,
-    #             obj_file_dec,
-    #             'log.txt',
-    #             concavity=0.0025,
-    #             alpha=0.04,
-    #             beta=0.05,
-    #             gamma=0.00125,
-    #             minVolumePerCH=0.0001,
-    #             resolution=1000000,
-    #             depth=20,
-    #             planeDownsampling=4,
-    #             convexhullDownsampling=4,
-    #             pca=0,
-    #             mode=0,
-    #             convexhullApproximation=1
-    #         )
-
-    #     obj_id = self.robot.pb_client.load_geom(
-    #         'mesh',
-    #         mass=0.01,
-    #         mesh_scale=mesh_scale,
-    #         visualfile=obj_file_dec,
-    #         collifile=obj_file_dec,
-    #         base_pos=pos,
-    #         base_ori=ori)
-
-    #     # register the object with the meshcat visualizer
-    #     self.viz.recorder.register_object(obj_id, obj_file_dec, scaling=mesh_scale)
-    #     safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
-    #     safeCollisionFilterPair(self.robot.arm.robot_id, self.table_id, -1, -1, enableCollision=True)
-
-    #     p.changeDynamics(obj_id, -1, lateralFriction=0.5, linearDamping=5, angularDamping=5)
-
-    #     # depending on the object/pose type, constrain the object to its world frame pose
-    #     o_cid = None
-    #     # or (load_pose_type == 'any_pose' and pc == 'child')
-    #     if (obj_class in ['syn_rack_easy', 'syn_rack_hard', 'syn_rack_med', 'rack']):
-    #         o_cid = constraint_obj_world(obj_id, pos, ori)
-    #         self.robot.pb_client.set_step_sim(False)
-
-    #     self.scene_dict[obj_key]['o_cid'] = o_cid
-
-    #     time.sleep(1.5)
-
-    #     obj_pose_world = p.getBasePositionAndOrientation(obj_id)
-    #     obj_pose_world = util.list2pose_stamped(list(obj_pose_world[0]) + list(obj_pose_world[1]))
-    #     return obj_id, obj_pose_world
-
-    def segment_scene(self, obj_ids=None):
-        depth_imgs = []
-        seg_idxs = []
-
+    def segment_scene(self, obj_ids=None, sim_seg=True):
         pc_obs_info = {}
         pc_obs_info['pcd'] = {}
         pc_obs_info['pcd_pts'] = {}
 
         if not obj_ids:
-            obj_ids = [self.scene_dict[obj_key]['obj_id'] for obj_key in self.scene_dict]
+            obj_ids = {self.scene_dict[obj_key]['obj_id'] for obj_key in self.scene_dict}
 
         for obj_id in obj_ids:
             pc_obs_info['pcd_pts'][obj_id] = []
 
+        obj_classes = {}
+        for obj_class, objs in self.all_scene_objs.items():
+            for obj_info in objs:
+                if obj_info['obj_id'] in obj_ids:
+                    obj_classes[obj_info['obj_id']] = obj_class
+                
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
-            rgb, depth, seg = cam.get_images(get_rgb=True, get_depth=True, get_seg=True)
+            rgb, depth, pyb_seg = cam.get_images(get_rgb=True, get_depth=True, get_seg=True)
             pts_raw, _ = cam.get_pcd(in_world=True, rgb_image=rgb, depth_image=depth, depth_min=0.0, depth_max=np.inf)
+            if sim_seg:
+                seg = pyb_seg
+                # flatten and find corresponding pixels in segmentation mask
+                flat_seg = seg.flatten()
+                for obj_id in obj_ids:
+                    obj_inds = np.where(flat_seg == obj_id)                
+                    obj_pts = pts_raw[obj_inds[0], :]
+                    pc_obs_info['pcd_pts'][obj_id].append(util.crop_pcd(obj_pts))
+            else:
+                height, width, _ = rgb.shape
+                pts_2d = pts_raw.reshape((height, width, 3))
+                obj_bbs = detect_bbs(rgb, obj_classes)
 
-            # flatten and find corresponding pixels in segmentation mask
-            flat_seg = seg.flatten()
-            flat_depth = depth.flatten()
+                for obj_id, region in obj_bbs.items():
+                    region_pcd = get_region(pts_2d, region)
+                    largest_cluster = get_largest_pcd(region_pcd)
+                    z = largest_cluster[:, 2]
+                    min_z = z.min()
 
-            for obj_id in obj_ids:
-                obj_inds = np.where(flat_seg == obj_id)
-                seg_depth = flat_depth[obj_inds[0]]  
-                
-                obj_pts = pts_raw[obj_inds[0], :]
-                pc_obs_info['pcd_pts'][obj_id].append(util.crop_pcd(obj_pts))
+                    table_mask = np.where(z <= min_z+0.001)
+                    obj_mask = np.where(z > min_z+0.001)
+                    obj_pcd = largest_cluster[obj_mask]
 
-            depth_imgs.append(seg_depth)
-            seg_idxs.append(obj_inds)
+                    # table_z_max, table_z_min =  
+                    if obj_class not in pc_obs_info:
+                        pc_obs_info[obj_id] = []
+                    pc_obs_info['pcd_pts'][obj_id].append(obj_pcd)
 
-        # merge point clouds from different views, and filter weird artifacts away from the object
         for obj_id, obj_pcd_pts in pc_obs_info['pcd_pts'].items():
             target_obj_pcd_obs = np.concatenate(obj_pcd_pts, axis=0)  # object shape point cloud
             target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
             inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
             target_obj_pcd_obs = target_obj_pcd_obs[inliers]
+            # trimesh_util.trimesh_show([target_obj_pcd_obs])
 
             #Debt: key should be obj_id not obj_key but whatever
             for obj_key in self.scene_dict:
