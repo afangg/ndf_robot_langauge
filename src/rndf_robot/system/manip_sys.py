@@ -26,11 +26,13 @@ def main(pipeline):
 
     if random and pipeline.state == -1:
         config = dict(
-            objects={'bottle': 1, 'mug': 1}
+            objects={'bowl': {(1,0,0,1):1}, 'mug': {(0,0,1,1):1}}
         )
         pipeline.setup_random_scene(config)
 
-    test_objs, concept = pipeline.prompt_query()
+    corresponding_concept = pipeline.prompt_user()
+    test_objs, concept = pipeline.get_relevant_test_obs(corresponding_concept)
+
     pipeline.assign_classes(test_objs)
     pipeline.cfg = pipeline.get_env_cfgs()
     
@@ -44,7 +46,7 @@ def main(pipeline):
     else:
         ids = pipeline.find_relevant_objs()
 
-    pipeline.segment_scene(ids, sim_seg=True)
+    pipeline.segment_scene(ids, sim_seg=False)
 
     ee_poses = pipeline.find_correspondence()
     pipeline.execute(ee_poses)
