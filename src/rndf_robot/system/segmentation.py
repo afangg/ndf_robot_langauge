@@ -12,6 +12,8 @@ import matplotlib.pyplot as plt
 
 from transformers import OwlViTProcessor, OwlViTForObjectDetection
 from rndf_robot.utils import util, trimesh_util
+from airobot import Robot, log_info, set_log_level, log_warn, log_debug
+
 
 STANDARD_COLORS = [
     'AliceBlue', 'Chartreuse', 'Aqua', 'Aquamarine', 'Azure', 'Beige', 'Bisque',
@@ -82,7 +84,7 @@ def draw_bounding_box_on_image(image,
   draw.line([(left, top), (left, bottom), (right, bottom),
              (right, top), (left, top)], width=thickness, fill=color)
   try:
-    font = ImageFont.truetype(font="/usr/share/fonts/truetype/freefont/FreeMono.ttf", size=70)
+    font = ImageFont.truetype(font="/usr/share/fonts/truetype/freefont/FreeMono.ttf", size=15)
   except IOError:
     font = ImageFont.load_default()
 
@@ -120,7 +122,7 @@ def owlvit_detect(image, classes, show_seg=False):
     
     obj_ids = list(classes.keys())
     # how does it handle ['a photo of a mug', 'a photo of a bowl', 'a photo of a mug']
-    texts = [[f'a photo of a {classes[obj_id]}' for obj_id in obj_ids]]
+    texts = [[f'a photo of {classes[obj_id]}' for obj_id in obj_ids]]
 
     pil_image = Image.fromarray(np.uint8(image)).convert('RGB')
     inputs = processor(text=texts, images=pil_image, return_tensors="pt")
@@ -135,8 +137,7 @@ def owlvit_detect(image, classes, show_seg=False):
     texts = texts[i]
     bounding_boxes = {}
     boxes, scores, labels = results[i]["boxes"], results[i]["scores"], results[i]["labels"]
-    score_threshold = 0.2
-    # from IPython import embed; embed()
+    score_threshold = 0.05
 
     for box, score, label in zip(boxes, scores, labels):
         box = [round(i, 2) for i in box.tolist()]
@@ -146,11 +147,13 @@ def owlvit_detect(image, classes, show_seg=False):
                 bounding_boxes[obj_ids[label]] = (confidence_score, box)
 
     if show_seg:
-        for _, box in bounding_boxes.items():
-            xmin,ymin,xmax,ymax, = box
+        for _, box_score in bounding_boxes.items():
+            score, box = box_score
+            xmin,ymin,xmax,ymax = box
             print(f"Detected {texts[label]} with confidence {confidence_score} at location {box}")
-            draw_bounding_box_on_image(pil_image, ymin, xmin, ymax, xmax, color=np.random.choice(STANDARD_COLORS))
-            plt.imshow(pil_image)
+            draw_bounding_box_on_image(pil_image, ymin, xmin, ymax, xmax, color=np.random.choice(STANDARD_COLORS), 
+                                       display_str_list=[f"{texts[label]}: {score}"], use_normalized_coordinates=False)
+        plt.imshow(pil_image)
         plt.show()
     return bounding_boxes
 
@@ -166,7 +169,7 @@ def detect_bbs(image, classes):
 def get_largest_pcd(pcd, show_scene=False):
     region_pcd = o3d.geometry.PointCloud()
     region_pcd.points = o3d.utility.Vector3dVector(pcd)
-    labels = np.array(region_pcd.cluster_dbscan(eps=0.02, min_points=20))
+    labels = np.array(region_pcd.cluster_dbscan(eps=0.015, min_points=20))
     freq_label = stats.mode(labels)[0]
     max_pcd = pcd[np.where(labels == freq_label)]
     if show_scene:

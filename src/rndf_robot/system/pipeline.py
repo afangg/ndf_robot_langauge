@@ -37,7 +37,7 @@ from ndf_robot.utils.pipeline_util import (
 )
 from rndf_robot.eval.relation_tools.multi_ndf import infer_relation_intersection, create_target_descriptors
 from rndf_robot.system.segmentation import detect_bbs, get_largest_pcd, get_region
-from rndf_robot.system.language import query_correspondance
+from rndf_robot.system.language import query_correspondance, chunk_query, create_keyword_dic
 
 from airobot import Robot, log_info, set_log_level, log_warn, log_debug
 from airobot.utils import common
@@ -265,7 +265,6 @@ class Pipeline():
                 convexhullApproximation=1
             )
 
-        # from IPython import embed; embed()
         obj_id = self.robot.pb_client.load_geom(
             'mesh',
             mass=0.01,
@@ -359,7 +358,7 @@ class Pipeline():
     def prompt_user(self):
         log_debug('All demo labels: %s' %self.demo_dic.keys())
         while True:
-            corresponding_concept = self.ask_query()
+            corresponding_concept, query_text = self.ask_query()
             demos = self.demo_dic[corresponding_concept] if corresponding_concept in self.demo_dic else []
             if not len(demos):
                 log_warn('No demos correspond to the query! Try a different prompt')
@@ -376,7 +375,7 @@ class Pipeline():
         elif corresponding_concept.startswith('place') and self.state == -1:
             self.state = 2
         log_debug('Current State is %s' %self.state)
-        return corresponding_concept
+        return corresponding_concept, query_text
 
     def ask_query(self):
         concepts = list(self.demo_dic.keys())
@@ -385,10 +384,10 @@ class Pipeline():
             ranked_concepts = query_correspondance(self, concepts, query_text)
             for concept in ranked_concepts:
                 print('Corresponding concept:', concept)
-                query_text = input('Corrent concept? (y/n)\n')
-                if query_text == 'n':
+                correct = input('Corrent concept? (y/n)\n')
+                if correct == 'n':
                     continue
-                elif query_text == 'y':
+                elif correct == 'y':
                     corresponding_concept = concept
                     break
             
@@ -399,7 +398,7 @@ class Pipeline():
         #     demo_file = np.load(demos[0], allow_pickle=True)
         #     if 'table_urdf' in demo_file:
         #         self.table_model = demo_file['table_urdf'].item()
-        return corresponding_concept
+        return corresponding_concept, query_text
 
     #################################################################################################
     # Set up scene
@@ -503,46 +502,54 @@ class Pipeline():
     #################################################################################################
     # Segment the scene
 
-    def get_relevant_test_obs(self, concept):
+    def get_keywords(self, query, relevant_classes):
+        chunked_query = chunk_query(query)
+        return create_keyword_dic(relevant_classes, chunked_query)
+
+    def get_relevant_classes(self, concept):
         concept_path = concept.split(' ')[-1]
         concept = frozenset(concept.lower().replace('_', ' ').split(' '))
         test_obj_classes = set(rndf_utils.mesh_data_dirs.keys())
         test_objs = concept.intersection(test_obj_classes)
         return test_objs, concept_path
     
-    def assign_classes(self, test_objs):
+    def assign_classes(self, test_objs, keywords={}):
         # what's the best way to determine which object should be manipulated and which is stationary automatically?
-
         if len(test_objs) == 1:
             self.scene_dict['child']['class'] = next(iter(test_objs))
-            return
-
-        self.scene_dict['parent'] = {}
-        if 'class' in self.scene_dict['child'] and self.scene_dict['child']['class'] in test_objs:
-            parent = test_objs.difference({self.scene_dict['child']['class']})
-            self.scene_dict['parent']['class'] = next(iter(parent))
         else:
-            obj_1, obj_2 = test_objs
+            self.scene_dict['parent'] = {}
+            if 'class' in self.scene_dict['child'] and self.scene_dict['child']['class'] in test_objs:
+                parent = test_objs.difference({self.scene_dict['child']['class']})
+                self.scene_dict['parent']['class'] = next(iter(parent))
+            else:
+                obj_1, obj_2 = test_objs
 
-            if obj_1 in rndf_utils.static and obj_1 in rndf_utils.moveable:
-                if obj_2 in rndf_utils.static:
-                    self.scene_dict['parent']['class'] = obj_2
-                    self.scene_dict['child']['class'] = obj_1
-                else:
+                if obj_1 in rndf_utils.static and obj_1 in rndf_utils.moveable:
+                    if obj_2 in rndf_utils.static:
+                        self.scene_dict['parent']['class'] = obj_2
+                        self.scene_dict['child']['class'] = obj_1
+                    else:
+                        self.scene_dict['parent']['class'] = obj_1
+                        self.scene_dict['child']['class'] = obj_2
+                elif obj_1 in rndf_utils.static:
                     self.scene_dict['parent']['class'] = obj_1
                     self.scene_dict['child']['class'] = obj_2
-            elif obj_1 in rndf_utils.static:
-                self.scene_dict['parent']['class'] = obj_1
-                self.scene_dict['child']['class'] = obj_2
-            else:
-                self.scene_dict['parent']['class'] = obj_2
-                self.scene_dict['child']['class'] = obj_1
-        if 'parent' in self.demo_dic:
-            log_debug('Parent: %s'% self.scene_dict['parent']['class'])
+                else:
+                    self.scene_dict['parent']['class'] = obj_2
+                    self.scene_dict['child']['class'] = obj_1
+            if 'parent' in self.demo_dic:
+                log_debug('Parent: %s'% self.scene_dict['parent']['class'])
         log_debug('Child: %s'% self.scene_dict['child']['class'])
+        print('assign')
+        # from IPython import embed; embed()
 
+        for keyword, obj_class in keywords.items():
+            for obj_type in self.scene_dict:
+                if obj_class == self.scene_dict[obj_type]['class']:
+                    self.scene_dict[obj_type]['keyword'] = keyword
+                
     def segment_scene(self, obj_ids=None, sim_seg=True):
-        from IPython import embed; embed()
         pc_obs_info = {}
         pc_obs_info['pcd'] = {}
         pc_obs_info['pcd_pts'] = {}
@@ -550,15 +557,19 @@ class Pipeline():
         if not obj_ids:
             obj_ids = {self.scene_dict[obj_key]['obj_id'] for obj_key in self.scene_dict}
 
-        for obj_id in obj_ids:
-            pc_obs_info['pcd_pts'][obj_id] = []
-
+        # TODO: please fix this it's so bad
         obj_classes = {}
         for obj_class, objs in self.all_scene_objs.items():
             for obj_info in objs:
                 if obj_info['obj_id'] in obj_ids:
                     obj_classes[obj_info['obj_id']] = obj_class
-                
+                    for obj_type in self.scene_dict:
+                        if obj_info['obj_id'] == self.scene_dict[obj_type]['obj_id'] and 'keyword' in self.scene_dict[obj_type]:
+                            obj_classes[obj_info['obj_id']] = self.scene_dict[obj_type]['keyword']
+
+        for obj_id in obj_ids:
+            pc_obs_info['pcd_pts'][obj_id] = []
+
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
             rgb, depth, pyb_seg = cam.get_images(get_rgb=True, get_depth=True, get_seg=True)
@@ -578,7 +589,7 @@ class Pipeline():
 
                 for obj_id, region in obj_bbs.items():
                     region_pcd = get_region(pts_2d, region)
-                    largest_cluster = get_largest_pcd(region_pcd)
+                    largest_cluster = get_largest_pcd(region_pcd, True)
                     z = largest_cluster[:, 2]
                     min_z = z.min()
 
@@ -591,12 +602,19 @@ class Pipeline():
                         pc_obs_info[obj_id] = []
                     pc_obs_info['pcd_pts'][obj_id].append(obj_pcd)
 
+
         for obj_id, obj_pcd_pts in pc_obs_info['pcd_pts'].items():
+            if not obj_pcd_pts:
+                log_warn('WARNING: COULD NOT FIND RELEVANT OBJ')
+                from IPython import embed; embed()
+                break
+
             target_obj_pcd_obs = np.concatenate(obj_pcd_pts, axis=0)  # object shape point cloud
             target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
             inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
             target_obj_pcd_obs = target_obj_pcd_obs[inliers]
             if self.args.debug:
+                trimesh_util.trimesh_show(obj_pcd_pts)
                 trimesh_util.trimesh_show([target_obj_pcd_obs])
 
             #Debt: key should be obj_id not obj_key but whatever
