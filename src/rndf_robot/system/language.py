@@ -5,45 +5,12 @@ from flair.data import Sentence
 
 import torch
 import numpy as np
-# def process_query(self, existing_concepts, query):
-#     concepts = list(self.demo_dic.keys())
-#     n = len(concepts)
-#     concept_embeddings = self.ll_model.encode(concepts, convert_to_tensor=True)
 
-#     while True:
-#         query_text = input('Please enter a query\n')
-#         target_embedding= self.ll_model.encode(query_text, convert_to_tensor=True)
-#         scores = sentence_util.pytorch_cos_sim(target_embedding, concept_embeddings)
-#         sorted_scores, idx = torch.sort(scores, descending=True)
-#         sorted_scores, idx = sorted_scores.flatten(), idx.flatten()
-#         corresponding_concept = None
-#         for i in range(n):
-#             print('Corresponding concept:', concepts[idx[i]])
-#             query_text = input('Corrent concept? (y/n)\n')
-#             if query_text == 'n':
-#                 continue
-#             elif query_text == 'y':
-#                 corresponding_concept = concepts[idx[i]]
-#                 break
-        
-#         if corresponding_concept:
-#             break
+llm = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
 
-#     demos = self.demo_dic[corresponding_concept] if corresponding_concept in self.demo_dic else []
-#     if not len(demos):
-#         log_warn('No demos correspond to the query!')
-        
-#     log_debug('Number of Demos %s' % len(demos)) 
-
-#     if demos is not None and self.table_model is None:
-#         demo_file = np.load(demos[0], allow_pickle=True)
-#         if 'table_urdf' in demo_file:
-#             self.table_model = demo_file['table_urdf'].item()
-#     return demos, corresponding_concept
-
-def query_correspondance(self, existing_concepts, query):
-    concept_embeddings = self.ll_model.encode(existing_concepts, convert_to_tensor=True)
-    target_embedding= self.ll_model.encode(query, convert_to_tensor=True)
+def query_correspondance(existing_concepts, query):
+    concept_embeddings = llm.encode(existing_concepts, convert_to_tensor=True)
+    target_embedding= llm.encode(query, convert_to_tensor=True)
     scores = sentence_util.pytorch_cos_sim(target_embedding, concept_embeddings)
     sorted_scores, idx = torch.sort(scores, descending=True)
     sorted_scores, idx = sorted_scores.flatten(), idx.flatten()
@@ -69,4 +36,3 @@ def create_keyword_dic(relevent_objs, sentence_dic):
                 if obj in phrase:
                     keywords[phrase] = obj
     return keywords
-

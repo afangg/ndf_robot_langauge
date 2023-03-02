@@ -17,10 +17,8 @@ import rndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_networ
 
 from airobot import Robot, log_info, set_log_level, log_warn
 
-from sentence_transformers import SentenceTransformer
-from sentence_transformers import util as sentence_util
-
 random = True
+
 def main(pipeline):
     # torch.manual_seed(args.seed)
 
@@ -31,26 +29,22 @@ def main(pipeline):
         pipeline.setup_random_scene(config)
 
     corresponding_concept, query_text = pipeline.prompt_user()
-    relevant_classes, concept = pipeline.get_relevant_classes(corresponding_concept)
-    keywords = pipeline.get_keywords(query_text, relevant_classes)
-
-    pipeline.assign_classes(relevant_classes, keywords)
-    pipeline.cfg = pipeline.get_env_cfgs()
+    concept = pipeline.identify_objs_from_query(query_text, corresponding_concept)
     
-    pipeline.set_initial_paths(concept)
+    pipeline.get_intial_model_paths(concept)
     
-    pipeline.load_demos(concept, pipeline.args.n_demos)
+    pipeline.load_demos(concept)
     pipeline.load_models()
 
-    if not random:
-        ids = pipeline.setup_scene_objs()
-    else:
-        ids = pipeline.find_relevant_objs()
+    # if not random:
+    #     ids = pipeline.setup_scene_objs()
+    # else:
+    #     ids = pipeline.find_relevant_objs()
 
     pipeline.segment_scene(sim_seg=False)
 
     ee_poses = pipeline.find_correspondence()
-    pipeline.execute(ee_poses)
+    pipeline.execute(pipeline.ranked_objs[0], ee_poses)
 
     # pipeline.teleport_obj(obj_id, obj_end_pose_list)
 
@@ -105,9 +99,10 @@ if __name__ == "__main__":
     # all_objs_dirs = [path for path in path_util.get_ndf_obj_descriptions() if '_centered_obj_normalized' in path] 
     # all_demos_dirs = osp.join(path_util.get_ndf_data(), 'demos')
 
-    pipeline = Pipeline(args)
+    all_demos_dirs = osp.join(path_util.get_rndf_data(), 'release_demos')
+    pipeline = Pipeline()
 
-    pipeline.load_demos_dict()
+    pipeline.load_demos_dict(all_demos_dirs)
     pipeline.setup_client()
 
     server = VizServer(pipeline.robot.pb_client)
