@@ -36,9 +36,9 @@ from ndf_robot.utils.pipeline_util import (
     constraint_grasp_open
 )
 from rndf_robot.eval.relation_tools.multi_ndf import infer_relation_intersection, create_target_descriptors
-from segmentation import detect_bbs, get_largest_pcd, get_region
+from segmentation import detect_bbs, get_label_pcds, extend_pcds
 from language import query_correspondance, chunk_query, create_keyword_dic
-from demos import get_concept_demos
+from demos import get_concept_demos, all_demos
 import objects
 
 from airobot import Robot, log_info, set_log_level, log_warn, log_debug
@@ -90,9 +90,8 @@ class Pipeline():
                 self.last_ee = last_ee
                 break
             elif x == '2':
-                for obj_class in self.all_scene_objs:
-                    for obj in self.all_scene_objs[obj_class]:
-                        self.robot.pb_client.remove_body(obj['obj_id'])
+                for obj_id in self.obj_info:
+                    self.robot.pb_client.remove_body(obj_id)
 
                 self.robot.arm.go_home(ignore_physics=True)
                 self.robot.arm.move_ee_xyz([0, 0, 0.2])
@@ -173,12 +172,12 @@ class Pipeline():
                 for _ in range(n):
                     obj_id, obj_pose_world, o_cid = self.add_obj(obj_class,color=color)
                     obj = {
-                        'class': obj_id,
+                        'class': obj_class,
                         'pose': obj_pose_world,
                         'o_cid': o_cid,
                         'rank': -1
                     }
-                    self.obj_info[obj_id].append(obj)
+                    self.obj_info[obj_id] = obj
 
 
     def add_obj(self, obj_class, scale_default=None, color=None):
@@ -193,24 +192,23 @@ class Pipeline():
 
         pos = [np.random.random() * (x_high - x_low) + x_low, np.random.random() * (y_high - y_low) + y_low, self.cfg.TABLE_Z]
         log_debug('original: %s' %pos)
-        for obj_class in self.all_scene_objs:
-            for obj in self.all_scene_objs[obj_class]:
-                existing_pos = util.pose_stamped2list(obj['pose'])
+        for obj_id, obj in self.obj_info.items():
+            existing_pos = util.pose_stamped2list(obj['pose'])
 
-                if abs(pos[0]-existing_pos[0]) < self.cfg.OBJ_SAMPLE_PLACE_X_DIST:
-                    if abs(pos[0]+self.cfg.OBJ_SAMPLE_PLACE_X_DIST-existing_pos[0]) > abs(pos[0]-self.cfg.OBJ_SAMPLE_PLACE_X_DIST-existing_pos[0]):
-                        pos[0] += self.cfg.OBJ_SAMPLE_PLACE_X_DIST 
-                    else:
-                        pos[0] -= self.cfg.OBJ_SAMPLE_PLACE_X_DIST                         
-                    log_debug('obj too close, moved x')
-                    continue
+            if abs(pos[0]-existing_pos[0]) < self.cfg.OBJ_SAMPLE_PLACE_X_DIST:
+                if abs(pos[0]+self.cfg.OBJ_SAMPLE_PLACE_X_DIST-existing_pos[0]) > abs(pos[0]-self.cfg.OBJ_SAMPLE_PLACE_X_DIST-existing_pos[0]):
+                    pos[0] += self.cfg.OBJ_SAMPLE_PLACE_X_DIST 
+                else:
+                    pos[0] -= self.cfg.OBJ_SAMPLE_PLACE_X_DIST                         
+                log_debug('obj too close, moved x')
+                continue
 
-                if abs(pos[1]-existing_pos[1]) < self.cfg.OBJ_SAMPLE_PLACE_Y_DIST:
-                    if abs(pos[1]+self.cfg.OBJ_SAMPLE_PLACE_Y_DIST-existing_pos[1]) > abs(pos[1]-self.cfg.OBJ_SAMPLE_PLACE_Y_DIST-existing_pos[1]):
-                        pos[1] += self.cfg.OBJ_SAMPLE_PLACE_Y_DIST 
-                    else:
-                        pos[1] -= self.cfg.OBJ_SAMPLE_PLACE_Y_DIST                         
-                    log_debug('obj too close, moved Y')
+            if abs(pos[1]-existing_pos[1]) < self.cfg.OBJ_SAMPLE_PLACE_Y_DIST:
+                if abs(pos[1]+self.cfg.OBJ_SAMPLE_PLACE_Y_DIST-existing_pos[1]) > abs(pos[1]-self.cfg.OBJ_SAMPLE_PLACE_Y_DIST-existing_pos[1]):
+                    pos[1] += self.cfg.OBJ_SAMPLE_PLACE_Y_DIST 
+                else:
+                    pos[1] -= self.cfg.OBJ_SAMPLE_PLACE_Y_DIST                         
+                log_debug('obj too close, moved Y')
 
         if self.random_pos:
             if self.test_obj in ['bowl', 'bottle']:
@@ -325,7 +323,7 @@ class Pipeline():
 
         return: the concept most similar to their query and their input text
         '''
-        log_debug('All demo labels: %s' %self.demo_dic.keys())
+        log_debug('All demo labels: %s' %all_demos.keys())
         while True:
             corresponding_concept, query_text = self.ask_query()
             demos = get_concept_demos(corresponding_concept)
@@ -352,7 +350,7 @@ class Pipeline():
 
         return: the concept most similar to their query and their input text
         '''
-        concepts = list(self.demo_dic.keys())
+        concepts = list(all_demos.keys())
         while True:
             query_text = input('Please enter a query\n')
             ranked_concepts = query_correspondance(concepts, query_text)
@@ -413,12 +411,26 @@ class Pipeline():
     #     #     safeCollisionFilterPair(self.scene_dict['parent']['obj_id'], self.scene_dict['child']['obj_id'], -1, -1, enableCollision=True)
     #     return ids
 
-    def assign_ranks(self, relevent_objs):
+    def associate_ranked_objs(self, relevent_objs):
         '''
-        @relevent_objs: {rank: obj_class/keywords}
+        @relevent_objs: {keywords: obj_class}
         '''
         for obj_rank, obj_class in relevent_objs.items():
             if obj_rank in self.ranked_objs: continue
+            obj_class = self.obj_info[obj_id]['class']
+            # class might not be enough - keywords are more helpful
+            if obj_class in self.class_to_id:
+                obj_id = next(iter(self.obj_id[obj_class]))
+                self.ranked_objs[obj_rank] = {'obj_id': obj_id}
+                self.obj_info[obj_class]['rank'] = obj_rank
+            else:
+                # TODO: Generate the objects? Ask for feedback?
+                log_warn('NO RELEVANT OBJECT IN THE SCENE. EXITING')
+                return
+            
+        for keyword, obj_class in relevent_objs.items():
+            # for obj_rank, obj in self.ranked_objs.items():
+            #     if 'obj_id' in obj
             obj_class = self.obj_info[obj_id]['class']
             # class might not be enough - keywords are more helpful
             if obj_class in self.class_to_id:
@@ -434,7 +446,7 @@ class Pipeline():
     #################################################################################################
     # Segment the scene
 
-    def identify_objs_from_query(self, query, corresponding_concept):
+    def identify_classes_from_query(self, query, corresponding_concept):
         '''
         Takes a query and skill concept and identifies the relevant object classes to execute the skill.
         
@@ -449,112 +461,101 @@ class Pipeline():
         relevant_classes = concept_language.intersection(all_obj_classes)
         chunked_query = chunk_query(query)
         keywords = create_keyword_dic(relevant_classes, chunked_query)
-        self.assign_classes(relevant_classes, keywords)
-        return concept_key
+        self.assign_classes(keywords)
+        return concept_key, keywords
 
-    
-    def assign_classes(self, test_objs, keywords={}):
+
+    def assign_classes(self, keywords):
         '''
         @test_objs: list of relevant object classes to determine rank for
-        @keywords: dictionary mapping a noun phrase to the object class mentioned in the phrase
+        @keywords: list of associated obj class, noun phrase, and verb flag as pairs of tuples in form (class, NP, True/False)
         '''
         # what's the best way to determine which object should be manipulated and which is stationary automatically?
-        if len(test_objs) == 1:
-            self.ranked_objs['child']['class'] = next(iter(test_objs))
+        if len(keywords) == 1 and 0 not in self.ranked_objs:
+            # only one noun phrase mentioned, probably the object to be moved
+            keyword = keywords.pop()
+            self.ranked_objs[0] = {}
+            self.ranked_objs[0]['description'] = keyword[1]
+            self.ranked_objs[0]['potential_class'] = keyword[0]
         else:
-            self.scene_dict['parent'] = {}
-            if 'class' in self.scene_dict['child'] and self.scene_dict['child']['class'] in test_objs:
-                parent = test_objs.difference({self.scene_dict['child']['class']})
-                self.scene_dict['parent']['class'] = next(iter(parent))
+            if len(keywords) > 1 and 0 in self.ranked_objs:
+                for pair in keywords:
+                    # check if the obj class mentioned in noun phrase same as object to be moved
+                    if pair[0] == self.ranked_objs[0]['potential_class']:
+                        keyword.remove(pair)
+            if len(keywords) == 1:
+                keyword = keywords.pop()
+                self.ranked_objs[1] = {}
+                self.ranked_objs[1]['description'] = keyword[1]
+                self.ranked_objs[1]['potential_class'] = keyword[0]
             else:
-                obj_1, obj_2 = test_objs
+                if self.state != 2 and len(keywords) > 2:
+                    log_warn('There is more than one noun mentioned in the query and unsure what to do')
+                    return
+                pair_1, pair_2 = keywords
 
-                if obj_1 in objects.static and obj_1 in objects.moveable:
-                    if obj_2 in objects.static:
-                        self.scene_dict['parent']['class'] = obj_2
-                        self.scene_dict['child']['class'] = obj_1
-                    else:
-                        self.scene_dict['parent']['class'] = obj_1
-                        self.scene_dict['child']['class'] = obj_2
-                elif obj_1 in objects.static:
-                    self.scene_dict['parent']['class'] = obj_1
-                    self.scene_dict['child']['class'] = obj_2
+                if pair_1[2]:
+                    pairs = [pair_1, pair_2]
+                elif pair_2[2]:
+                    pairs = [pair_2, pair_1]
                 else:
-                    self.scene_dict['parent']['class'] = obj_2
-                    self.scene_dict['child']['class'] = obj_1
-            if 'parent' in self.demo_dic:
-                log_debug('Parent: %s'% self.scene_dict['parent']['class'])
-        log_debug('Child: %s'% self.scene_dict['child']['class'])
-        print('assign')
-        # from IPython import embed; embed()
+                    log_warn("Unsure which object to act on")
 
-        for keyword, obj_class in keywords.items():
-            for obj_type in self.scene_dict:
-                if obj_class == self.scene_dict[obj_type]['class']:
-                    self.scene_dict[obj_type]['keyword'] = keyword
-                
-    def segment_scene(self, obj_ids=None, sim_seg=True):
-        '''
-        @obj_captions: list of object captions to have CLIP detect
-        @sim_seg: use pybullet gt segmentation or not 
-        '''
-        pc_obs_info = {}
-        pc_obs_info['pcd'] = {}
-        pc_obs_info['pcd_pts'] = {}
+                for i in range(2):
+                    self.ranked_objs[i] = {}
+                    self.ranked_objs[1]['description'] = pairs[i][1]
+                    self.ranked_objs[0]['potential_class'] = pairs[i][0]
 
+        target = 'Target - class:%s, descr: %s'% (self.ranked_objs[0]['potential_class'], self.ranked_objs[0]['description'])
+        log_debug(target)
+        if 1 in self.ranked_objs:
+            relation = 'Relational - class:%s, descr: %s'% (self.ranked_objs[1]['potential_class'], self.ranked_objs[1]['description'])
+            log_debug(relation)
+
+    def assign_pcds(self, labels_to_pcds, obj_ranks=None):
+        for obj_rank in obj_ranks:
+            description = self.ranked_objs[obj_rank]['descriptions']
+            obj_class = self.ranked_objs[obj_rank]['potential_class']
+
+            if description in labels_to_pcds:
+                # just pick the first pcd
+                self.ranked_objs[obj_rank]['pcd'] = labels_to_pcds[description].pop()
+            elif obj_class in labels_to_pcds:
+                self.ranked_objs[obj_rank]['pcd'] = labels_to_pcds[obj_class].pop()
+            else:
+                log_warn(f'Could not find pcd for ranked obj {obj_rank}')
+
+        with self.viz.recorder.meshcat_scene_lock:
+            for _, obj in self.ranked_objs.items():
+                label = 'scene/%s_pcd' % obj['description']
+                color = [random.randint(0,255), random.randint(0,255), random.randint(0,255)]
+                util.meshcat_pcd_show(self.viz.mc_vis, obj['pcd'], color=color, name=label)
+
+
+    def segment_scene_pb(self, obj_ids=None):
         if not obj_ids:
-            obj_ids = {self.scene_dict[obj_key]['obj_id'] for obj_key in self.scene_dict}
-
-        # TODO: please fix this it's so bad
-        obj_classes = {}
-        for obj_class, objs in self.all_scene_objs.items():
-            for obj_info in objs:
-                if obj_info['obj_id'] in obj_ids:
-                    obj_classes[obj_info['obj_id']] = obj_class
-                    for obj_type in self.scene_dict:
-                        if obj_info['obj_id'] == self.scene_dict[obj_type]['obj_id'] and 'keyword' in self.scene_dict[obj_type]:
-                            obj_classes[obj_info['obj_id']] = self.scene_dict[obj_type]['keyword']
-
-        for obj_id in obj_ids:
-            pc_obs_info['pcd_pts'][obj_id] = []
+            obj_ids = list(self.obj_info.keys())
+            
+        pc_obs_info = {}
+        pc_obs_info['pcd'] = {} #  
+        pc_obs_info['pcd_pts'] = {} #caption: [[pcd0], [pcd1], ...]
 
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
             rgb, depth, pyb_seg = cam.get_images(get_rgb=True, get_depth=True, get_seg=True)
             pts_raw, _ = cam.get_pcd(in_world=True, rgb_image=rgb, depth_image=depth, depth_min=0.0, depth_max=np.inf)
-            if sim_seg:
-                seg = pyb_seg
-                # flatten and find corresponding pixels in segmentation mask
-                flat_seg = seg.flatten()
-                for obj_id in obj_ids:
-                    obj_inds = np.where(flat_seg == obj_id)                
-                    obj_pts = pts_raw[obj_inds[0], :]
-                    pc_obs_info['pcd_pts'][obj_id].append(util.crop_pcd(obj_pts))
-            else:
-                height, width, _ = rgb.shape
-                pts_2d = pts_raw.reshape((height, width, 3))
-                obj_bbs = detect_bbs(rgb, obj_classes)
 
-                for obj_id, region in obj_bbs.items():
-                    region_pcd = get_region(pts_2d, region)
-                    largest_cluster = get_largest_pcd(region_pcd, True)
-                    z = largest_cluster[:, 2]
-                    min_z = z.min()
-
-                    table_mask = np.where(z <= min_z+0.001)
-                    obj_mask = np.where(z > min_z+0.001)
-                    obj_pcd = largest_cluster[obj_mask]
-
-                    # table_z_max, table_z_min =  
-                    if obj_class not in pc_obs_info:
-                        pc_obs_info[obj_id] = []
-                    pc_obs_info['pcd_pts'][obj_id].append(obj_pcd)
-
+            seg = pyb_seg
+            # flatten and find corresponding pixels in segmentation mask
+            flat_seg = seg.flatten()
+            for obj_id in obj_ids:
+                obj_inds = np.where(flat_seg == obj_id)                
+                obj_pts = pts_raw[obj_inds[0], :]
+                pc_obs_info['pcd_pts'][obj_id].append(util.crop_pcd(obj_pts))
 
         for obj_id, obj_pcd_pts in pc_obs_info['pcd_pts'].items():
             if not obj_pcd_pts:
                 log_warn('WARNING: COULD NOT FIND RELEVANT OBJ')
-                from IPython import embed; embed()
                 break
 
             target_obj_pcd_obs = np.concatenate(obj_pcd_pts, axis=0)  # object shape point cloud
@@ -565,25 +566,63 @@ class Pipeline():
                 trimesh_util.trimesh_show(obj_pcd_pts)
                 trimesh_util.trimesh_show([target_obj_pcd_obs])
 
-            #Debt: key should be obj_id not obj_key but whatever
-            for obj_key in self.scene_dict:
-                if self.scene_dict[obj_key]['obj_id'] == obj_id:
-                    self.scene_dict[obj_key]['pcd'] = target_obj_pcd_obs 
-                    if not target_obj_pcd_obs.any():
-                        log_warn('Failed to get pointcloud of target object')
+            self.obj_info[obj_id] = target_obj_pcd_obs
 
-        with self.viz.recorder.meshcat_scene_lock:
-            for obj_key in self.scene_dict:
-                label = 'scene/%s_pcd' % obj_key
-                color = [random.randint(0,255), random.randint(0,255), random.randint(0,255)]
-                util.meshcat_pcd_show(self.viz.mc_vis, self.scene_dict[obj_key]['pcd'], color=color, name=label)
+    def segment_scene(self, captions=None):
+        '''
+        @obj_captions: list of object captions to have CLIP detect
+        @sim_seg: use pybullet gt segmentation or not 
+        '''
+        if not captions:
+            obj_descriptions = []
+            for obj_rank in self.ranked_objs:
+                if 'pcd' not in self.ranked_objs[obj_rank]:
+                    obj_descriptions.append(self.ranked_objs[obj_rank]['description'])
+                    
+        label_to_pcds = {}
+
+        for i, cam in enumerate(self.cams.cams): 
+            # get image and raw point cloud
+            rgb, depth, pyb_seg = cam.get_images(get_rgb=True, get_depth=True, get_seg=True)
+            pts_raw, _ = cam.get_pcd(in_world=True, rgb_image=rgb, depth_image=depth, depth_min=0.0, depth_max=np.inf)
+
+            height, width, _ = rgb.shape
+            pts_2d = pts_raw.reshape((height, width, 3))
+            obj_bbs = detect_bbs(rgb, obj_descriptions)
+
+            for obj_label, regions in obj_bbs.items():
+                label_pcds = get_label_pcds(regions, pts_2d)
+                if obj_label not in label_pcds:
+                    label_to_pcds[obj_label] = label_pcds
+                else:
+                    label_to_pcds[obj_label] = extend_pcds(label_pcds, label_to_pcds[obj_label])
+            
+        pcds_output = {}
+        
+        from IPython import embed; embed()
+
+        for obj_label in obj_descriptions:
+            if obj_label not in label_to_pcds:
+                log_warn('WARNING: COULD NOT FIND RELEVANT OBJ')
+                break
+            obj_pcd_sets = label_to_pcds[obj_label]
+            for target_obj_pcd_obs in obj_pcd_sets:
+                target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
+                inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
+                target_obj_pcd_obs = target_obj_pcd_obs[inliers]
+                if obj_label not in pcds_output:
+                    pcds_output[obj_label] = []
+                pcds_output[obj_label].append(target_obj_pcd_obs)
+                if self.args.debug:
+                    trimesh_util.trimesh_show(target_obj_pcd_obs)
+                    trimesh_util.trimesh_show([target_obj_pcd_obs])
 
     #################################################################################################
     # Process demos
 
     def load_demos(self, concept):
         n = self.args.n_demos
-        if 'parent' in self.scene_dict:
+        if 1 in self.ranked_objs:
             self.get_relational_descriptors(concept, n)
         else:
             self.get_single_descriptors(n)
@@ -695,7 +734,7 @@ class Pipeline():
         self.load_models()
         # bare minimum settings
         create_target_descriptors(
-            self.ranked_objs[1]['model'], self.ranked_objs[0]['model'], self.scene_dict, target_desc_fname, 
+            self.ranked_objs[1]['model'], self.ranked_objs[0]['model'], self.ranked_objs, target_desc_fname, 
             self.cfg, query_scale=self.args.query_scale, scale_pcds=False, 
             target_rounds=self.args.target_rounds, pc_reference=self.args.pc_reference,
             skip_alignment=self.args.skip_alignment, n_demos=n_demos, manual_target_idx=self.args.target_idx, 
@@ -874,7 +913,7 @@ class Pipeline():
             #         if obj != other_obj:
             #             print(obj['obj_id'], other_obj['obj_id'])
             #             safeCollisionFilterPair(obj['obj_id'], other_obj['obj_id'], -1, -1, enableCollision=True)
-            safeCollisionFilterPair(self.scene_dict['parent']['obj_id'], self.scene_dict['child']['obj_id'], -1, -1, enableCollision=True)
+            safeCollisionFilterPair(self.ranked_objs[1]['obj_id'], self.ranked_objs[0]['obj_id'], -1, -1, enableCollision=True)
 
     def get_iks(self, ee_poses):
         return [self.cascade_ik(pose) for pose in ee_poses]

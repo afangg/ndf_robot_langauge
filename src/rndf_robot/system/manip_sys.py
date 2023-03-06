@@ -18,6 +18,7 @@ import rndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_networ
 from airobot import Robot, log_info, set_log_level, log_warn
 
 random = True
+# from IPython import embed; embed()
 
 def main(pipeline):
     # torch.manual_seed(args.seed)
@@ -28,11 +29,13 @@ def main(pipeline):
         )
         pipeline.setup_random_scene(config)
 
+
     corresponding_concept, query_text = pipeline.prompt_user()
-    concept = pipeline.identify_objs_from_query(query_text, corresponding_concept)
+    concept, keywords = pipeline.identify_classes_from_query(query_text, corresponding_concept)
+    labels_to_pcds = pipeline.segment_scene(keywords)
+    pipeline.assign_pcds(labels_to_pcds)
     
     pipeline.get_intial_model_paths(concept)
-    
     pipeline.load_demos(concept)
     pipeline.load_models()
 
@@ -40,8 +43,6 @@ def main(pipeline):
     #     ids = pipeline.setup_scene_objs()
     # else:
     #     ids = pipeline.find_relevant_objs()
-
-    pipeline.segment_scene(sim_seg=False)
 
     ee_poses = pipeline.find_correspondence()
     pipeline.execute(pipeline.ranked_objs[0], ee_poses)
@@ -99,10 +100,7 @@ if __name__ == "__main__":
     # all_objs_dirs = [path for path in path_util.get_ndf_obj_descriptions() if '_centered_obj_normalized' in path] 
     # all_demos_dirs = osp.join(path_util.get_ndf_data(), 'demos')
 
-    all_demos_dirs = osp.join(path_util.get_rndf_data(), 'release_demos')
-    pipeline = Pipeline()
-
-    pipeline.load_demos_dict(all_demos_dirs)
+    pipeline = Pipeline(args)
     pipeline.setup_client()
 
     server = VizServer(pipeline.robot.pb_client)
