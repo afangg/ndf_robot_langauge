@@ -35,7 +35,7 @@ def create_target_desc_subdir(demo_path, parent_model_path, child_model_path, cr
         util.safe_makedirs(dirname)
     return dirname
 
-def get_parent_child_models(descriptor_dirname):
+def get_model_paths(descriptor_dirname):
     delim = '--rndf_weights--'
     _, parent_model_path, child_model_path = descriptor_dirname.split(delim)
     parent_model_path = parent_model_path.split('_child')[0]

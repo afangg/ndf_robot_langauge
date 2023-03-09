@@ -3,17 +3,14 @@ import numpy as np
 import open3d as o3d
 
 from PIL import Image
-import PIL.ImageColor as ImageColor
 import PIL.ImageDraw as ImageDraw
 import PIL.ImageFont as ImageFont
 
-from scipy import stats
 import matplotlib.pyplot as plt
 
 from transformers import OwlViTProcessor, OwlViTForObjectDetection
-from rndf_robot.utils import util, trimesh_util
-from airobot import Robot, log_info, set_log_level, log_warn, log_debug
-
+from airobot import log_debug
+from IPython import embed;
 
 STANDARD_COLORS = [
     'AliceBlue', 'Chartreuse', 'Aqua', 'Aquamarine', 'Azure', 'Beige', 'Bisque',
@@ -116,7 +113,7 @@ def draw_bounding_box_on_image(image,
     text_bottom -= text_height - 2 * margin
 
 
-def owlvit_detect(image, descriptions, score_threshold=0.05, show_seg=False):
+def owlvit_detect(image, descriptions, score_threshold=0.06, show_seg=False):
     '''
     Detects objects in image that corresponding to a given description and returns the bounding boxes
     of the parts of the image that match above a certain threshold
@@ -145,34 +142,39 @@ def owlvit_detect(image, descriptions, score_threshold=0.05, show_seg=False):
     texts = texts[i]
     bounding_boxes = {}
     boxes, scores, labels = results[i]["boxes"], results[i]["scores"], results[i]["labels"]
+    highest_scores = {}
 
-    print(f"Highest score is {max(scores)}")
+    log_debug(f"Highest score is {max(scores)}")
 
     for box, score, caption in zip(boxes, scores, labels):
         box = [round(i, 2) for i in box.tolist()]
         label = descriptions[caption]
-        print(f"Detected {label} with confidence {score} at location {box}")
 
         if score < score_threshold:
             continue
+        # print(f"Detected {label} with confidence {score} at location {box}")
 
         if label not in bounding_boxes:
             bounding_boxes[label] = []
+            highest_scores[label] = []
         
         # what to do if two objs of the same class are on top of each other lol (one in front of the other)
         # just remove larger one? idk
         remove_idx = None
         for i, existing_bb in enumerate(bounding_boxes[label]):
             smaller = bb_contained(box, existing_bb) 
-            if smaller == 0: # they don't overlap, continue
-                continue
-            elif smaller == 1: # this new bb is smaller and overlaps, remove the bigger one and add the bb
-                remove_idx = i
-            else: # this new bb is bigger, don't add it
+            if smaller == 0: # this new bb is bigger, don't add it
                 remove_idx = -1
+            elif smaller == 1: # this new bb is smaller and overlaps, remove the bigger one
+                remove_idx = i
+            else: # they dont overlap, continue
+                continue
+        score = round(score.item(),3)
         bounding_boxes[label].append(box)
+        highest_scores[label].append([score])
         if remove_idx is not None:
             del bounding_boxes[label][remove_idx]
+            del highest_scores[label][remove_idx]
 
         # obj_captions[label]
         # for existing_bb in obj_captions[label]:
@@ -184,22 +186,25 @@ def owlvit_detect(image, descriptions, score_threshold=0.05, show_seg=False):
         #     if not_contained: continue
 
     if show_seg:
-        for label, bbs in bounding_boxes.items():
-            for bb in bbs:
-                xmin,ymin,xmax,ymax = bb
+        for label in bounding_boxes:
+            bbs = bounding_boxes[label]
+            scores = highest_scores[label]
+            for i in range(len(bbs)):
+                xmin,ymin,xmax,ymax = bbs[i]
+                # score = round(scores[i].item(), 3)
+                score = scores[i]
                 # print(f"Detected {label} with confidence {score} at location {bb}")
                 # draw_bounding_box_on_image(pil_image, ymin, xmin, ymax, xmax, color=np.random.choice(STANDARD_COLORS), 
                 #                         display_str_list=[f"{label}: {score}"], use_normalized_coordinates=False)
                 draw_bounding_box_on_image(pil_image, ymin, xmin, ymax, xmax, color=np.random.choice(STANDARD_COLORS), 
-                                display_str_list=[f"{label}"], use_normalized_coordinates=False)
+                                display_str_list=[f"{label}: {score}"], use_normalized_coordinates=False)
         plt.imshow(pil_image)
         plt.show()
 
     label_count = {label: len(bounding_boxes[label]) for label in bounding_boxes}
-    log_debug(f'{label_count}')    
-    return bounding_boxes
+    return bounding_boxes, highest_scores
 
-def bb_contained(bb1, bb2):
+def bb_contained(bb1, bb2, margin=0.01):
     '''
     bb1: (xmin,ymin,xmax,ymax)
     bb2: (xmin,ymin,xmax,ymax)
@@ -210,30 +215,30 @@ def bb_contained(bb1, bb2):
         xmin1,ymin1,xmax1,ymax1 = bb1
         xmin2,ymin2,xmax2,ymax2 = bb2  
 
-        if xmin1 >= xmin2 and xmax1 <= xmax2 and ymin1 >= ymin2 and ymax1 <= ymax2:
+        if xmin1 >= xmin2-margin and xmax1 <= xmax2+margin and ymin1 >= ymin2-margin and ymax1 <= ymax2+margin:
             return i
         bb1, bb2 = bb2, bb1
     return None
    
 def detect_bbs(image, classes):
-    ids_to_bb = owlvit_detect(image, classes)
+    ids_to_bb, cam_scores = owlvit_detect(image, classes, show_seg=False)
     obj_to_region = {}
     for obj_id, boxes in ids_to_bb.items():
         obj_to_region[obj_id] = [(list(int(i) for i in box)) for box in boxes]
-    return obj_to_region
+    return obj_to_region, cam_scores
 
 def get_largest_pcd(pcd, show_scene=False):
     region_pcd = o3d.geometry.PointCloud()
     region_pcd.points = o3d.utility.Vector3dVector(pcd)
     labels = np.array(region_pcd.cluster_dbscan(eps=0.015, min_points=20))
-    freq_label = stats.mode(labels)[0]
+    if len(labels) == 0: return []
+    freq_label = mode(labels)[0]
     max_pcd = pcd[np.where(labels == freq_label)]
     if show_scene:
         pcds = []
         for label in set(labels):
             label_pcd = pcd[np.where(labels == label)]
             pcds.append(label_pcd)
-        trimesh_util.trimesh_show(pcds)
     return max_pcd      
 
 def get_region(full_pcd, region):
@@ -252,6 +257,7 @@ def get_obj_pcds(rgb, pts_raw, obj_classes):
         for i, region in enumerate(obj_regions[obj_class]):
             region_pcd = get_region(pts_2d, region)
             largest_cluster = get_largest_pcd(region_pcd)
+            if len(largest_cluster) == 0: continue
             z = largest_cluster[:, 2]
             min_z = z.min()
 
@@ -265,7 +271,7 @@ def get_obj_pcds(rgb, pts_raw, obj_classes):
             obj_pcds[obj_class].append(obj_pcd)
     return obj_pcds
 
-def extend_pcds(cam_pcds, pcd_list):
+def extend_pcds(cam_pcds, pcd_list, cam_scores, pcd_scores):
     '''
     Given partial pcds in a camera view, finds which existing incomplete pcd it most likely belongs to
     Finds the partial pcd with the closest centroid that is at least 2cms away from the existing pcds
@@ -274,24 +280,35 @@ def extend_pcds(cam_pcds, pcd_list):
 
     cam_pcds: np.array (n, m, 3)
     pcd_list: np.array (j, k, 3)
+    cam_scores: (n, a) list
+    pcd_scores: (j, b) list
 
     return: updated pcd list
     '''
-    from IPython import embed; embed()
 
     #might want to keep each camera's pcd seperated
+
     centroids = [np.average(partial_obj, axis=0) for partial_obj in pcd_list]
     new_centroids = np.array([np.average(pcd, axis=0) for pcd in cam_pcds])
-    for i, centroid in enumerate(centroids):
-       diff = new_centroids-centroid
-       centroid_dists = np.sqrt(sum(diff**2,axis=-1))
-       min_idx = np.argmin(centroid_dists)
 
-       if centroid_dists[min_idx] <= 0.02:
-           pcd_list[i] = np.concatenate(pcd_list[i], cam_pcds[min_idx], axis=0)
-           cam_pcds = np.delete(cam_pcds, min_idx, 0)
-           new_centroids = np.delete(new_centroids, min_idx, 0)
-    return np.concatenate((pcd_list, cam_pcds))
+    # centroids = np.average(pcd_list, axis=1)
+    # new_centroids = np.average(cam_pcds, axis=1)
+    new_list = []
+    for i, centroid in enumerate(centroids):
+        if len(new_centroids) == 0: break
+        diff = new_centroids-centroid
+        centroid_dists = np.sqrt(np.sum(diff**2,axis=-1))
+        min_idx = np.argmin(centroid_dists)
+        log_debug(f'closest centroid is {centroid_dists[min_idx]} away')
+
+        updated_pcds = pcd_list[i]
+        if centroid_dists[min_idx] <= 0.1:
+            updated_pcds = np.concatenate((updated_pcds, cam_pcds[min_idx]))
+            pcd_scores[i].append(cam_scores.pop(min_idx)[0])
+            cam_pcds = np.delete(cam_pcds, min_idx, 0)
+            new_centroids = np.delete(new_centroids, min_idx, 0)
+        new_list.append(updated_pcds)
+    return new_list + list(cam_pcds), pcd_scores + cam_scores
 
 def get_label_pcds(regions, pts_2d):
     label_pcds = []
@@ -305,4 +322,20 @@ def get_label_pcds(regions, pts_2d):
         obj_mask = np.where(z > min_z+0.001)
         obj_pcd = largest_cluster[obj_mask]
         label_pcds.append(obj_pcd)
-    return np.array(label_pcds)
+    return label_pcds
+
+def mode(a, axis=0):
+    scores = np.unique(np.ravel(a))       # get ALL unique values
+    testshape = list(a.shape)
+    testshape[axis] = 1
+    oldmostfreq = np.zeros(testshape)
+    oldcounts = np.zeros(testshape)
+
+    for score in scores:
+        template = (a == score)
+        counts = np.expand_dims(np.sum(template, axis),axis)
+        mostfrequent = np.where(counts > oldcounts, score, oldmostfreq)
+        oldcounts = np.maximum(counts, oldcounts)
+        oldmostfreq = mostfrequent
+
+    return mostfrequent, oldcounts

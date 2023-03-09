@@ -23,7 +23,6 @@ def query_correspondance(existing_concepts, query):
     sorted_scores, idx = torch.sort(scores, descending=True)
     sorted_scores, idx = sorted_scores.flatten(), idx.flatten()
     idx = idx.detach().cpu().numpy()
-    # from IPython import embed; embed()
     return np.array(existing_concepts)[idx]
 
 def chunk_query(query):

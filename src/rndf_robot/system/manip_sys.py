@@ -1,39 +1,33 @@
 from pipeline import Pipeline 
 from vizServer import VizServer 
 
-
 import argparse
-import os, os.path as osp
-
-import sys
-from rndf_robot.system import vizServer
-# sys.path.append('/home/afo/repos/relational_ndf/src/')
-
-import time
-import torch
-from rndf_robot.utils import path_util
-from rndf_robot.utils import util
-import rndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_network
-
-from airobot import Robot, log_info, set_log_level, log_warn
+from airobot import log_info, set_log_level, log_warn
 
 random = True
-# from IPython import embed; embed()
+use_privilege_info = False
+use_py_seg = False
 
 def main(pipeline):
     # torch.manual_seed(args.seed)
 
     if random and pipeline.state == -1:
         config = dict(
-            objects={'bowl': {(1,0,0,1):1, (0.1,0.8,0,1):1, (0,0.2,1,1):1}}
+            objects={'bowl': {(1,0,0.1,1):1, (0.1,0.8,0,1):1}, 'mug': {(0,0.5,0.8,1):1}}
         )
         pipeline.setup_random_scene(config)
+        if use_privilege_info:
+            pipeline.segment_scene_pb()
 
 
     corresponding_concept, query_text = pipeline.prompt_user()
     concept, keywords = pipeline.identify_classes_from_query(query_text, corresponding_concept)
     labels_to_pcds = pipeline.segment_scene(keywords)
-    pipeline.assign_pcds(labels_to_pcds)
+    if pipeline.state == 0:
+        ranks = [0]
+    else:
+        ranks = [0,1]
+    pipeline.assign_pcds(labels_to_pcds,ranks)
     
     pipeline.get_intial_model_paths(concept)
     pipeline.load_demos(concept)
@@ -45,7 +39,7 @@ def main(pipeline):
     #     ids = pipeline.find_relevant_objs()
 
     ee_poses = pipeline.find_correspondence()
-    pipeline.execute(pipeline.ranked_objs[0], ee_poses)
+    pipeline.execute(0, ee_poses)
 
     # pipeline.teleport_obj(obj_id, obj_end_pose_list)
 
