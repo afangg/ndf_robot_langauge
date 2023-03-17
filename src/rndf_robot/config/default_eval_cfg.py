@@ -49,6 +49,7 @@ _C.OBJ_SAMPLE_PLACE_Y_DIST = 0.25
 _C.PREGRASP_OFFSET_TF = [0, 0, 0.25, 0, 0, 0, 1]
 # _C.PREPLACE_OFFSET_TF = [0, -0.2, 0, 0, 0, 0, 1]
 _C.PREPLACE_HORIZONTAL_OFFSET_TF = [0, -0.2, 0, 0, 0, 0, 1]
+_C.PREPLACE_VERTICAL_OFFSET_TF = [0, 0, 0.2, 0, 0, 0, 1]
 _C.PREPLACE_OFFSET_TF = [0, -0.042, 0.05, 0, 0, 0, 1]
 
 # demo configs
@@ -353,7 +354,8 @@ _C.BOWL.AVOID_SHAPENET_IDS = [
     'ea473a79fd2c98e5789eafad9d8a9394',
     'e4c871d1d5e3c49844b2fa2cac0778f5',
     'f6ffca90c543edf9d6438d5cb8c578c6',
-    'f6ffca90c543edf9d6438d5cb8c578c6'
+    'f6ffca90c543edf9d6438d5cb8c578c6',
+    'd98455f19960f99ed684faddec3c0090'
 ]
 _C.BOWL.TEST_SHAPENET_IDS = [
     'f2ef5e5b49f2bb8340dfb1e6c8f5a333',

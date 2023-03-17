@@ -11,6 +11,7 @@ from matplotlib import cm
 import meshcat
 import meshcat.geometry as mcg
 import trimesh
+import healpy as hp  # pylint: disable=g-import-not-at-top
 
 class AttrDict(dict):
   __getattr__ = dict.__getitem__
@@ -803,7 +804,6 @@ def generate_healpix_grid(recursion_level=None, size=None):
   Returns:
     (N, 3, 3) array of rotation matrices, where N=72*8**recursion_level.
   """
-  import healpy as hp  # pylint: disable=g-import-not-at-top
   from airobot.utils import common
 
   assert not(recursion_level is None and size is None)

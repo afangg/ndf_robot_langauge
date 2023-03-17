@@ -13,6 +13,9 @@ import meshcat
 from airobot.utils import common
 from airobot import log_info, log_warn, log_debug, log_critical, set_log_level
 
+import sys
+sys.path.append('/data/pulkitag/data/afo/repos/ndf_robot_language/src/')
+
 from rndf_robot.utils import util, path_util
 
 from airobot import Robot
@@ -70,8 +73,8 @@ def pb2mc_update(recorder, mc_vis):
     iters = 0
     while True:
         iters += 1
-        recorder.add_keyframe()
-        recorder.update_meshcat_current_state(mc_vis)
+        # recorder.add_keyframe()
+        # recorder.update_meshcat_current_state(mc_vis)
         time.sleep(1/230.0)
 
 class DefaultQueryPoints:
@@ -126,6 +129,7 @@ def main(args):
 
     parent_class = args.parent_class
     child_class = args.child_class
+    same_class = True if parent_class == child_class else False
     pcl = ['parent', 'child']
 
     mesh_data_dirs_all = {
@@ -171,6 +175,8 @@ def main(args):
 
         mesh_names[k] = objects_filtered
     obj_classes = list(mesh_names.keys())
+    if len(obj_classes) == 1:
+        obj_classes = obj_classes*2
 
     save_dir = osp.join(path_util.get_rndf_data(), 'demos', 'relation_demos', args.exp)
     util.safe_makedirs(save_dir)
@@ -203,16 +209,16 @@ def main(args):
     #########################################################
     # Meshcat and robot visualization
 
-    mc_vis = meshcat.Visualizer(zmq_url='tcp://127.0.0.1:6000')
-    mc_vis['scene'].delete()
-    log_info(f'MeshCat URL: {mc_vis.url()}')
+    # mc_vis = meshcat.Visualizer(zmq_url='tcp://127.0.0.1:6000')
+    # mc_vis['scene'].delete()
+    # log_info(f'MeshCat URL: {mc_vis.url()}')
 
     global_dict = manager.global_dict
 
-    robot = Robot('franka', pb_cfg={'gui': True, 'server': True})
+    robot = Robot('franka', pb_cfg={'gui': True,})
     robot.pb_client.configureDebugVisualizer(robot.pb_client.COV_ENABLE_GUI, 0)
-    recorder = PyBulletMeshcat(pb_client=robot.pb_client, tmp_urdf_dir=osp.join(path_util.get_rndf_obj_descriptions(), 'tmp_urdf'))
-    recorder.clear()
+    # recorder = PyBulletMeshcat(pb_client=robot.pb_client, tmp_urdf_dir=osp.join(path_util.get_rndf_obj_descriptions(), 'tmp_urdf'))
+    # recorder.clear()
     new_home = [
         -0.2798878477975077, 
         -0.23823885657833854, 
@@ -273,15 +279,15 @@ def main(args):
     robot.pb_client.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
     robot.arm.set_jpos(new_home, ignore_physics=True)
 
-    recorder.register_object(robot.arm.robot_id, osp.join(path_util.get_rndf_descriptions(), 'franka_panda/panda.urdf'))
-    recorder.register_object(table_id, table_urdf_fname)
+    # recorder.register_object(robot.arm.robot_id, osp.join(path_util.get_rndf_descriptions(), 'franka_panda/panda.urdf'))
+    # recorder.register_object(table_id, table_urdf_fname)
 
-    rec_th = threading.Thread(target=pb2mc_update, args=(recorder, mc_vis,))
-    rec_th.daemon = True
+    # rec_th = threading.Thread(target=pb2mc_update, args=(recorder, mc_vis,))
+    # rec_th.daemon = True
     # rec_th.start()
 
     ##############################
-
+    print('stating key registration')
     place_iter = args.resume_iter
     while True:
         obj_id = None
@@ -390,7 +396,8 @@ def main(args):
                 manip_obj_id = static_obj_id_current
                 static_obj_id = manip_obj_id_current
                 safeRemoveConstraint(static_cid)
-                for obj_class in obj_classes:
+                for i, obj_class in enumerate(obj_classes):
+                    if same_class: obj_class = i
                     for obj_id in obj_ids[obj_class]:
                         if obj_id == static_obj_id:
                             obj_pose_world = np.concatenate(p.getBasePositionAndOrientation(obj_id)[:2]).tolist()
@@ -402,10 +409,10 @@ def main(args):
                 # Put new objects into the scene
 
                 time.sleep(1.0)
-                recorder.current_state_lock.acquire()
+                # recorder.current_state_lock.acquire()
                 robot.arm.reset(force_reset=True)
-                recorder.current_state_lock.release()
-                recorder.clear()
+                # recorder.current_state_lock.release()
+                # recorder.clear()
                 robot.pb_client.configureDebugVisualizer(p.COV_ENABLE_KEYBOARD_SHORTCUTS, False)
                 robot.pb_client.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
                 robot.arm.set_jpos(new_home, ignore_physics=True)
@@ -431,13 +438,14 @@ def main(args):
                 table_base_id = 0
 
                 obj_files_to_load = {}
-                for obj_class in obj_classes:
+                for i, obj_class in enumerate(obj_classes):
+                    file_id = i if same_class else obj_class
                     n_objs = 1
                     obj_names = random.sample(mesh_names[obj_class], n_objs)
                     if (obj_class == parent_class and args.is_parent_shapenet_obj) or (obj_class == child_class and args.is_child_shapenet_obj):
-                        obj_files_to_load[obj_class] = [osp.join(mesh_data_dirs[obj_class], obj_name, 'models/model_normalized.obj') for obj_name in obj_names]
+                        obj_files_to_load[file_id] = [osp.join(mesh_data_dirs[obj_class], obj_name, 'models/model_normalized.obj') for obj_name in obj_names]
                     else:
-                        obj_files_to_load[obj_class] = [osp.join(mesh_data_dirs[obj_class], obj_name) for obj_name in obj_names]
+                        obj_files_to_load[file_id] = [osp.join(mesh_data_dirs[obj_class], obj_name) for obj_name in obj_names]
 
                 upright_orientation_dict = {
                     'mug': common.euler2quat([np.pi/2, 0, 0]).tolist(), 
@@ -459,10 +467,14 @@ def main(args):
                 obj_model_file_dec_list = []
                 object_classes_list = []
 
-                for obj_class in obj_classes:
-                    obj_ids[obj_class] = []
+                for i, obj_class in enumerate(obj_classes):
+                    if same_class:
+                        obj_idx = i
+                    else:
+                        obj_idx = obj_class
+                    obj_ids[obj_idx] = []
                     obj_class_i = 0
-                    for fname in obj_files_to_load[obj_class]:
+                    for fname in obj_files_to_load[obj_idx]:
                         # sample mesh positions and orientation on the table
                         if (obj_class == parent_class and args.is_parent_shapenet_obj) or (obj_class == child_class and args.is_child_shapenet_obj):
                             scale_high, scale_low = cfg.MESH_SCALE_HIGH, cfg.MESH_SCALE_LOW
@@ -534,9 +546,12 @@ def main(args):
                                 pose = util.list2pose_stamped(pos + upright_orientation_dict[obj_class])
                             pose_w_yaw = util.transform_pose(pose, util.pose_from_matrix(rand_yaw_T))
                             pos, ori = util.pose_stamped2list(pose_w_yaw)[:3], util.pose_stamped2list(pose_w_yaw)[3:]
+                        color = [0.5, 0.2, 1, 1] if i == 0 else [0.5, 1, 0.2, 1]
+
                         if obj_class in ['syn_rack_easy', 'syn_rack_hard']:
                             # sample a random floating pose
                             robot.pb_client.set_step_sim(True)
+                            # child is purple
                             obj_id = robot.pb_client.load_geom(
                                 'mesh', 
                                 mass=0.01, 
@@ -545,7 +560,7 @@ def main(args):
                                 collifile=obj_file_to_load,
                                 base_pos=pos,
                                 base_ori=ori,
-                                rgba = [0.5, 0.2, 1, 1]) 
+                                rgba = color) 
 
                             o_cid = constraint_obj_world(obj_id, pos, ori)
                             robot.pb_client.set_step_sim(False)
@@ -558,16 +573,16 @@ def main(args):
                                 collifile=obj_file_to_load,
                                 base_pos=pos,
                                 base_ori=ori,
-                                rgba = [0.5, 0.2, 1, 1]) 
+                                rgba = color) 
 
                         for ji in range(p.getNumJoints(robot.arm.robot_id)):
                             safeCollisionFilterPair(bodyUniqueIdA=robot.arm.robot_id, bodyUniqueIdB=table_id, linkIndexA=ji, linkIndexB=table_base_id, enableCollision=False)
 
-                        obj_ids[obj_class].append(obj_id)
+                        obj_ids[obj_idx].append(obj_id)
                         obj_ids_all.append(obj_id)
                         obj_meshes_poses.append((fname, util.matrix_from_pose(pose_w_yaw), mesh_scale))
                         robot.pb_client.changeDynamics(obj_id, -1, linearDamping=5, angularDamping=5)
-                        recorder.register_object(obj_id, fname, scaling=mesh_scale)
+                        # recorder.register_object(obj_id, fname, scaling=mesh_scale)
                         time.sleep(0.5)  # give a little delay to avoid objects colliding upon spawn
 
                         # add to multi object placing demo info
@@ -607,8 +622,13 @@ def main(args):
                 start_obj_pointcloud_list = []
                 final_obj_pointcloud_list = []
 
-                manip_obj_id = obj_ids[child_class][0]
-                static_obj_id = obj_ids[parent_class][0]
+                if same_class:
+                    child_class_id, parent_class_id = 0, 1
+                else:
+                    child_class_id, parent_class_id = child_class, parent_class
+
+                manip_obj_id = obj_ids[child_class_id][0]
+                static_obj_id = obj_ids[parent_class_id][0]
                 static_cid = None
 
                 for ji in range(p.getNumJoints(robot.arm.robot_id)):
@@ -616,7 +636,8 @@ def main(args):
                     safeCollisionFilterPair(bodyUniqueIdA=robot.arm.robot_id, bodyUniqueIdB=static_obj_id, linkIndexA=ji, linkIndexB=-1, enableCollision=False)
                 
                 i_iter = 0
-                for obj_class in obj_classes:
+                for i, obj_class in enumerate(obj_classes):
+                    if same_class: obj_class = i
                     for obj_id in obj_ids[obj_class]:
                         obj_pose_world = np.concatenate(p.getBasePositionAndOrientation(obj_id)[:2]).tolist()
                         print(f'Object: {object_names_list[i_iter]}, Pose: ', obj_pose_world)
@@ -630,8 +651,8 @@ def main(args):
                 cam_intrinsics = []
                 
                 time.sleep(3.0)
-                recorder.add_keyframe()
-                recorder.update_meshcat_current_state(mc_vis)
+                # recorder.add_keyframe()
+                # recorder.update_meshcat_current_state(mc_vis)
                 for i, cam in enumerate(cams.cams): 
                     cam_int = cam.cam_int_mat
                     cam_ext = cam.cam_ext_mat
@@ -653,7 +674,8 @@ def main(args):
                     seg_imgs.append(seg)
 
                 i_iter = 0
-                for obj_class in obj_classes:
+                for i, obj_class in enumerate(obj_classes):
+                    if same_class: obj_class = i
                     for obj_id in obj_ids[obj_class]:
 
                         seg_depth_imgs_obj = []
@@ -689,13 +711,68 @@ def main(args):
                         start_obj_pointcloud_list.append(obj_pcd)
                         name = object_names_list[i_iter]
 
-                        recorder.meshcat_scene_lock.acquire()
-                        util.meshcat_pcd_show(mc_vis, obj_pcd, [0, 0, 0], name=f'scene/obj_pcd_{name}')
-                        recorder.meshcat_scene_lock.release()
+                        # recorder.meshcat_scene_lock.acquire()
+                        # util.meshcat_pcd_show(mc_vis, obj_pcd, [0, 0, 0], name=f'scene/obj_pcd_{name}')
+                        # recorder.meshcat_scene_lock.release()
 
                         i_iter += 1
 
                 robot.arm.set_jpos(new_home, ignore_physics=True)
+                time.sleep(1.0)
+                continue
+            if msg == "DEMO_PICK":
+                # save current pose
+                ee_pose_world = np.concatenate(robot.arm.get_ee_pose()[:2]).tolist()
+                robot_joints = robot.arm.get_jpos()
+                obj_pose_world = np.concatenate(p.getBasePositionAndOrientation(obj_id)[:2]).tolist()
+                gripper_closest_points = p.getClosestPoints(
+                    bodyA=obj_id, 
+                    bodyB=robot.arm.robot_id, 
+                    distance=0.0025,
+                    linkIndexA=-1, 
+                    linkIndexB=right_pad_id)
+
+                # sort by distance to the object
+                sorted(gripper_closest_points, key=lambda pt_info: pt_info[8])
+                gripper_contact_pose = copy.deepcopy(ee_pose_world)
+                if len(gripper_closest_points):
+                    for i, pt in enumerate(gripper_closest_points):
+                        print(pt[8])
+                    gripper_contact_pose[:3] = np.asarray(gripper_closest_points[0][5])
+
+                grasp_save_path = osp.join(save_dir, 'grasp_demo_' + str(shapenet_id) + '.npz')
+                cur_demo_iter = 0
+                while True:
+                    if osp.exists(grasp_save_path):
+                        grasp_save_path = osp.join(save_dir, 'grasp_demo_' + str(shapenet_id) + '_%d.npz' % cur_demo_iter)
+                        cur_demo_iter += 1
+                    else:
+                        break
+                print('saving to: %s' % grasp_save_path)
+                np.savez(
+                    grasp_save_path,
+                    shapenet_id=shapenet_id,
+                    ee_pose_world=np.asarray(ee_pose_world),
+                    robot_joints=np.asarray(robot_joints),
+                    obj_pose_world=np.asarray(obj_pose_world),
+                    obj_pose_camera=obj_pose_camera_np,
+                    object_pointcloud=pix_3d,
+                    rgb=rgb_imgs,
+                    depth_full=depth_imgs,
+                    depth=seg_depth_imgs,
+                    seg=seg_idxs,
+                    camera_poses=cam_poses,
+                    obj_model_file=obj_obj_file,
+                    obj_model_file_dec=obj_obj_file_dec,
+                    gripper_pts=gripper_pts,
+                    gripper_pts_gaussian=gripper_pts_gaussian,
+                    gripper_pts_uniform=gripper_pts_uniform,
+                    gripper_contact_pose=gripper_contact_pose,
+                    table_urdf=table_urdf,
+                    pcd_raw=pcd_raw,
+                    cam_intrinsics=cam_intrinsics
+                )
+
                 time.sleep(1.0)
                 continue
             if msg == "DEMO_PLACE":
@@ -709,7 +786,8 @@ def main(args):
                 obj_pose_world = np.concatenate(p.getBasePositionAndOrientation(obj_id)[:2]).tolist()
 
                 i_iter = 0
-                for obj_class in obj_classes:
+                for i, obj_class in enumerate(obj_classes):
+                    if same_class: obj_class = i
                     for obj_id in obj_ids[obj_class]:
                         obj_pose_world = np.concatenate(p.getBasePositionAndOrientation(obj_id)[:2]).tolist()
                         print('object pose world: ', obj_pose_world)
@@ -724,15 +802,16 @@ def main(args):
                         final_obj_pointcloud_list.append(final_obj_pcd)
                         name = object_names_list[i_iter]
 
-                        recorder.meshcat_scene_lock.acquire()
-                        util.meshcat_pcd_show(mc_vis, final_obj_pcd, [255, 0, 0], name=f'scene/final_obj_pcd_{name}')
-                        recorder.meshcat_scene_lock.release()
+                        # recorder.meshcat_scene_lock.acquire()
+                        # util.meshcat_pcd_show(mc_vis, final_obj_pcd, [255, 0, 0], name=f'scene/final_obj_pcd_{name}')
+                        # recorder.meshcat_scene_lock.release()
 
                         i_iter += 1
 
                 place_save_path = osp.join(save_dir, f'place_demo_{place_iter}.npz')
                 print(f'Saving to: {place_save_path}')
                 pix, cix = object_classes_list.index(parent_class), object_classes_list.index(child_class)
+                if pix == cix: pix = 1
                 save_dict = {
                     'multi_obj_names': dict(parent=object_classes_list[pix], child=object_classes_list[cix]),
                     'multi_obj_start_pcd': dict(parent=start_obj_pointcloud_list[pix], child=start_obj_pointcloud_list[cix]),
@@ -770,10 +849,11 @@ def main(args):
                 break
             time.sleep(0.001)
         
-        for obj_class in obj_classes:
+        for i, obj_class in enumerate(obj_classes):
+            if same_class: obj_class = i
             for obj_id in obj_ids[obj_class]:
                 if obj_id is not None:
-                    recorder.remove_object(mc_vis, obj_id)
+                    # recorder.remove_object(mc_vis, obj_id)
                     robot.pb_client.remove_body(obj_id)
 
 

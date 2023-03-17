@@ -29,6 +29,7 @@ class OccNetOptimizer:
         if torch.cuda.is_available():
             self.dev = torch.device('cuda:0')
         else:
+            log_warn('Using CPU')
             self.dev = torch.device('cpu')
 
         if self.model is not None:
@@ -57,17 +58,17 @@ class OccNetOptimizer:
         if self.single_object:
             log_warn('\n\n**** SINGLE OBJECT SET TO TRUE, WILL *NOT* USE A NEW SHAPE AT TEST TIME, AND WILL EXPECT TARGET INFO TO BE SET****\n\n')
 
-        self.debug_viz_path = 'debug_viz'
-        self.viz_path = 'visualization'
-        util.safe_makedirs(self.debug_viz_path)
-        util.safe_makedirs(self.viz_path)
-        self.viz_files =  []
-
+        # self.debug_viz_path = 'debug_viz'
+        # self.viz_path = 'visualization'
+        # util.safe_makedirs(self.debug_viz_path)
+        # util.safe_makedirs(self.viz_path)
+        # self.viz_files =  []
+        print('Start creating rot_grid?')
         self.rot_grid = util.generate_healpix_grid(size=1e6)
+        print('Finished creating rot_grid?')
         # self.rot_grid = None
 
         self.qp_tf = np.eye(4)
-        self.setup_meshcat()
 
     def setup_meshcat(self, mc_vis=None):
         self.mc_vis = mc_vis
@@ -328,7 +329,7 @@ class OccNetOptimizer:
                 plot3d(
                     [in_pts, shape_np],
                     ['blue', 'black'], 
-                    osp.join(self.debug_viz_path, 'recon_overlay.html'),
+                    # osp.join(self.debug_viz_path, 'recon_overlay.html'),
                     scene_dict=self.scene_dict,
                     z_plane=False)
 
@@ -398,12 +399,12 @@ class OccNetOptimizer:
 
             all_pts = [ee_pts_world, shape_pts_world_np]
             opt_fname = 'ee_pose_optimized_%d.html' % j if ee else 'rack_pose_optimized_%d.html' % j
-            plot3d(
-                all_pts, 
-                ['black', 'purple'], 
-                osp.join('visualization', opt_fname), 
-                z_plane=False)
-            self.viz_files.append(osp.join('visualization', opt_fname))
+            # plot3d(
+            #     all_pts, 
+            #     ['black', 'purple'], 
+            #     osp.join('visualization', opt_fname), 
+            #     z_plane=False)
+            # self.viz_files.append(osp.join('visualization', opt_fname))
 
             # if self.mc_vis is not None:
             #     util.meshcat_pcd_show(self.mc_vis, ee_pts_world, [0, 0, 0], name=f'scene/opt/ee_pts_world_{j}')
