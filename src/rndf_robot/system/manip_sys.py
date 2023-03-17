@@ -3,54 +3,55 @@ from vizServer import VizServer
 
 import argparse
 from airobot import log_info, set_log_level, log_warn
+from IPython import embed;
 
 random = True
 use_privilege_info = False
 use_py_seg = False
+generate_new_scene = True
 
-def main(pipeline):
+config = dict(
+    objects={'bowl': {(1,0,0.1,1):1, (0.1,0.8,0,1):1, (0,0.5,0.8,1):1},}
+)
+def main(pipeline, generate_new_scene=True):
     # torch.manual_seed(args.seed)
-
-    if random and pipeline.state == -1:
-        config = dict(
-            objects={'bowl': {(1,0,0.1,1):1, (0.1,0.8,0,1):1}, 'mug': {(0,0.5,0.8,1):1}}
-        )
+    if random and generate_new_scene:
         pipeline.setup_random_scene(config)
-        if use_privilege_info:
-            pipeline.segment_scene_pb()
 
-
-    corresponding_concept, query_text = pipeline.prompt_user()
+    prompt = pipeline.prompt_user()
+    if not prompt: pipeline.step()
+    corresponding_concept, query_text = prompt
     concept, keywords = pipeline.identify_classes_from_query(query_text, corresponding_concept)
-    labels_to_pcds = pipeline.segment_scene(keywords)
+    if use_privilege_info:
+        labels_to_pcds = pipeline.segment_scene_pb()
+    else:
+        labels_to_pcds = pipeline.segment_scene(keywords)
+    if not labels_to_pcds:
+        log_warn('WARNING: Target object not detected, resetting the scene')
+        pipeline.reset()
+        return
     if pipeline.state == 0:
         ranks = [0]
     else:
         ranks = [0,1]
+    
     pipeline.assign_pcds(labels_to_pcds,ranks)
     
     pipeline.get_intial_model_paths(concept)
     pipeline.load_demos(concept)
     pipeline.load_models()
 
-    # if not random:
-    #     ids = pipeline.setup_scene_objs()
-    # else:
-    #     ids = pipeline.find_relevant_objs()
-
     ee_poses = pipeline.find_correspondence()
-    pipeline.execute(0, ee_poses)
+    if pipeline.state == 2:
+        pipeline.teleport_obj(0, ee_poses)
+    else:
+        # can only teleport obj_id
+        pipeline.execute(0, ee_poses)
 
-    # pipeline.teleport_obj(obj_id, obj_end_pose_list)
-
-    # current_scene = dict(
-    #     final_ee_pos = ee_poses[-1],
-    #     obj_pcd=target_obj_pcd,
-    #     obj_pose=obj_pose_world,
-    #     obj_id=obj_id
-    # )
-
-    pipeline.step(ee_poses[-1])
+    if pipeline.state == 0:
+        return pipeline.step(ee_poses[-1])
+    else:
+        return pipeline.step()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -103,5 +104,5 @@ if __name__ == "__main__":
     pipeline.setup_table()
     pipeline.reset_robot()
     log_info('Loaded new table')
-    for iter in range(args.iterations):
-        main(pipeline)
+    while True:
+        generate_new_scene = main(pipeline, generate_new_scene)

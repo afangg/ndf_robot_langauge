@@ -113,7 +113,7 @@ def draw_bounding_box_on_image(image,
     text_bottom -= text_height - 2 * margin
 
 
-def owlvit_detect(image, descriptions, score_threshold=0.06, show_seg=False):
+def owlvit_detect(image, descriptions, score_threshold=0.055, show_seg=False):
     '''
     Detects objects in image that corresponding to a given description and returns the bounding boxes
     of the parts of the image that match above a certain threshold
@@ -231,7 +231,7 @@ def get_largest_pcd(pcd, show_scene=False):
     region_pcd = o3d.geometry.PointCloud()
     region_pcd.points = o3d.utility.Vector3dVector(pcd)
     labels = np.array(region_pcd.cluster_dbscan(eps=0.015, min_points=20))
-    if len(labels) == 0: return []
+    if len(labels) == 0: return np.array([])
     freq_label = mode(labels)[0]
     max_pcd = pcd[np.where(labels == freq_label)]
     if show_scene:
@@ -257,7 +257,7 @@ def get_obj_pcds(rgb, pts_raw, obj_classes):
         for i, region in enumerate(obj_regions[obj_class]):
             region_pcd = get_region(pts_2d, region)
             largest_cluster = get_largest_pcd(region_pcd)
-            if len(largest_cluster) == 0: continue
+            if largest_cluster.any(): continue
             z = largest_cluster[:, 2]
             min_z = z.min()
 
@@ -271,7 +271,7 @@ def get_obj_pcds(rgb, pts_raw, obj_classes):
             obj_pcds[obj_class].append(obj_pcd)
     return obj_pcds
 
-def extend_pcds(cam_pcds, pcd_list, cam_scores, pcd_scores):
+def extend_pcds(cam_pcds, pcd_list, cam_scores, pcd_scores, threshold=0.08):
     '''
     Given partial pcds in a camera view, finds which existing incomplete pcd it most likely belongs to
     Finds the partial pcd with the closest centroid that is at least 2cms away from the existing pcds
@@ -302,7 +302,7 @@ def extend_pcds(cam_pcds, pcd_list, cam_scores, pcd_scores):
         log_debug(f'closest centroid is {centroid_dists[min_idx]} away')
 
         updated_pcds = pcd_list[i]
-        if centroid_dists[min_idx] <= 0.1:
+        if centroid_dists[min_idx] <= threshold:
             updated_pcds = np.concatenate((updated_pcds, cam_pcds[min_idx]))
             pcd_scores[i].append(cam_scores.pop(min_idx)[0])
             cam_pcds = np.delete(cam_pcds, min_idx, 0)

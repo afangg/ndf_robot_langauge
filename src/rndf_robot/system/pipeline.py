@@ -4,10 +4,12 @@ import copy
 import numpy as np
 import torch
 import time
-# import sys
-# print(sys.path)
+import sys
+print(sys.path)
 
-# sys.path.append('/home/afo/repos/ndf_robot_language/src/')
+sys.path.append('/data/pulkitag/data/afo/repos/ndf_robot_language/src/')
+print(sys.path)
+
 import pybullet as p
 import rndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_network
 from rndf_robot.utils import util, trimesh_util
@@ -17,20 +19,17 @@ from ndf_robot.utils.franka_ik import FrankaIK
 from rndf_robot.opt.optimizer import OccNetOptimizer
 from rndf_robot.robot.multicam import MultiCams
 from rndf_robot.config.default_eval_cfg import get_eval_cfg_defaults
-from rndf_robot.config.default_obj_cfg import get_obj_cfg_defaults
 from ndf_robot.utils.pipeline_util import (
     safeCollisionFilterPair,
     safeRemoveConstraint,
     soft_grasp_close,
     object_is_still_grasped,
-    constraint_grasp_close,
     process_xq_data,
     process_xq_rs_data,
     process_demo_data,
     post_process_grasp_point,
     get_ee_offset,
     constraint_obj_world,
-    constraint_grasp_open
 )
 from rndf_robot.eval.relation_tools.multi_ndf import infer_relation_intersection, create_target_descriptors
 from segmentation import detect_bbs, get_label_pcds, extend_pcds
@@ -46,6 +45,7 @@ from IPython import embed;
 class Pipeline():
 
     def __init__(self, args):
+        log_debug('Pipeline initialized')
         self.tables = ['table_rack.urdf', 'table_shelf.urdf']
         self.args = args
 
@@ -72,6 +72,23 @@ class Pipeline():
         else:
             set_log_level('info')
 
+    def reset(self, new_scene=False):
+        if new_scene:
+            for obj_id in self.obj_info:
+                self.robot.pb_client.remove_body(obj_id)
+            time.sleep(1.5)
+
+            self.last_ee = None
+            self.obj_info = {}
+            self.class_to_id = {}
+
+        self.ranked_objs = {}
+        self.robot.arm.go_home(ignore_physics=True)
+        self.robot.arm.move_ee_xyz([0, 0, 0.2])
+        self.robot.arm.eetool.open()
+        self.state = -1
+        time.sleep(1.5)
+
     def register_vizServer(self, vizServer):
         self.viz = vizServer
 
@@ -83,24 +100,14 @@ class Pipeline():
                 # self.ee_pose = scene['final_ee_pos']
                 # robot.arm.get_ee_pose()
                 # self.scene_obj = scene['obj_pcd'], scene['obj_pose'], scene['obj_id']
-                self.last_ee = last_ee
-                break
+                if last_ee:
+                    self.last_ee = last_ee
+                else:
+                    self.reset(False)
+                return False
             elif x == '2':
-                for obj_id in self.obj_info:
-                    self.robot.pb_client.remove_body(obj_id)
-
-                self.robot.arm.go_home(ignore_physics=True)
-                self.robot.arm.move_ee_xyz([0, 0, 0.2])
-                self.robot.arm.eetool.open()
-
-                self.last_ee = None
-                self.ranked_objs = {}
-                self.obj_info = {}
-                self.class_to_id = {}
-
-                self.state = -1
-                time.sleep(1.5)
-                break
+                self.reset(True)
+                return True
 
     def setup_client(self):
         self.robot = Robot('franka', pb_cfg={'gui': self.args.pybullet_viz}, arm_cfg={'self_collision': False, 'seed': self.args.seed})
@@ -256,6 +263,7 @@ class Pipeline():
             base_pos=pos,
             base_ori=ori,
             rgba=color)
+        self.ik_helper.add_collision_bodies({obj_id: obj_id})
 
         # register the object with the meshcat visualizer
         self.viz.recorder.register_object(obj_id, obj_file_dec, scaling=mesh_scale)
@@ -277,6 +285,7 @@ class Pipeline():
         # with self.viz.recorder.meshcat_scene_lock:
         #     pose = util.matrix_from_pose(obj_pose_world)
         #     util.meshcat_obj_show(self.viz.mc_vis, obj_file_dec, pose, mesh_scale, name='scene/%s'%obj_class)
+        # self.ik_helper.register_object(obj_file_dec, pos, ori, mesh_scale, name=obj_id)
         return obj_id, obj_pose_world, o_cid
 
     #################################################################################################
@@ -324,6 +333,7 @@ class Pipeline():
         log_debug('All demo labels: %s' %all_demos.keys())
         while True:
             corresponding_concept, query_text = self.ask_query()
+            if not corresponding_concept: return
             demos = get_concept_demos(corresponding_concept)
             if not len(demos):
                 log_warn('No demos correspond to the query! Try a different prompt')
@@ -350,8 +360,9 @@ class Pipeline():
         '''
         concepts = list(all_demos.keys())
         while True:
-            query_text = input('Please enter a query\n')
+            query_text = input('Please enter a query or \'reset\' to reset the scene\n')
             if not query_text: continue
+            if query_text.lower() == "reset": return
             ranked_concepts = query_correspondance(concepts, query_text)
             corresponding_concept = None
             for concept in ranked_concepts:
@@ -483,12 +494,13 @@ class Pipeline():
                 for pair in keywords:
                     # check if the obj class mentioned in noun phrase same as object to be moved
                     if pair[0] == self.ranked_objs[0]['potential_class']:
-                        keywords.remove(pair)
+                        keywords.remove(pair)                
             if len(keywords) == 1:
+                priority_rank = 0 if 0 not in self.ranked_objs else 1
                 keyword = keywords.pop()
-                self.ranked_objs[1] = {}
-                self.ranked_objs[1]['description'] = keyword[1]
-                self.ranked_objs[1]['potential_class'] = keyword[0]
+                self.ranked_objs[priority_rank] = {}
+                self.ranked_objs[priority_rank]['description'] = keyword[1]
+                self.ranked_objs[priority_rank]['potential_class'] = keyword[0]
             else:
                 if self.state != 2 and len(keywords) > 2:
                     log_warn('There is more than one noun mentioned in the query and unsure what to do')
@@ -514,6 +526,11 @@ class Pipeline():
             log_debug(relation)
 
     def assign_pcds(self, labels_to_pcds, obj_ranks=None):
+        assigned_centroids = []
+        for obj_rank, obj in self.ranked_objs.items():
+            if 'pcd' in obj:
+                assigned_centroids.append(np.average(obj['pcd'], axis=0))
+        assigned_centroids = np.array(assigned_centroids)
         # pick the pcd with the most pts
         for label in labels_to_pcds:
             labels_to_pcds[label].sort(key=lambda x: x[0])
@@ -531,9 +548,15 @@ class Pipeline():
                 log_warn(f'Could not find pcd for ranked obj {obj_rank}')
                 continue
             # just pick the last pcd
+            new_pcds = []
             for score, pcd in labels_to_pcds[pcd_key]:
-                print(score)
-            self.ranked_objs[obj_rank]['pcd'] = labels_to_pcds[pcd_key].pop()[1]
+                if assigned_centroids.any():
+                    diff = assigned_centroids-np.average(pcd, axis=0)
+                    centroid_dists = np.sqrt(np.sum(diff**2,axis=-1))
+                    if min(centroid_dists) <= 0.05:
+                        continue
+                new_pcds.append(pcd)
+            self.ranked_objs[obj_rank]['pcd'] = new_pcds.pop(-1)
             # if self.args.debug:
             #     log_debug(f'Best score was {score}')
             #     trimesh_util.trimesh_show([self.ranked_objs[obj_rank]['pcd']])
@@ -598,6 +621,7 @@ class Pipeline():
                     
         label_to_pcds = {}
         label_to_scores = {}
+        threshold = 0.08
 
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
@@ -617,7 +641,7 @@ class Pipeline():
                     label_to_pcds[obj_label], label_to_scores[obj_label] = cam_pcds, cam_scores[obj_label]
                 else:
                     label_to_pcds[obj_label], label_to_scores[obj_label] = extend_pcds(cam_pcds, label_to_pcds[obj_label], 
-                                                                                       cam_scores[obj_label], label_to_scores[obj_label])
+                                                                                       cam_scores[obj_label], label_to_scores[obj_label], threshold=threshold-0.01*i)
                 log_debug(f'{obj_label} size is now {len(label_to_pcds[obj_label])}')
             
         pcds_output = {}
@@ -683,6 +707,8 @@ class Pipeline():
         self.ranked_objs[0]['query_pts'] = process_xq_data(demo, table_obj=self.table_obj)
         self.ranked_objs[0]['query_pts_rs'] = process_xq_rs_data(demo, table_obj=self.table_obj)
         self.ranked_objs[0]['demo_ids'] = frozenset(self.ranked_objs[0]['demo_ids'])
+        log_debug('Finished loading single descriptors')
+        return True
 
         # self.initial_poses = initial_poses
 
@@ -730,7 +756,9 @@ class Pipeline():
         self.ranked_objs[1]['target_desc'] = torch.from_numpy(relational_overall_target_desc).float().cuda()
         self.ranked_objs[0]['target_desc'] = torch.from_numpy(target_overall_target_desc).float().cuda()
         self.ranked_objs[1]['query_pts'] = target_descriptors_data['parent_query_points']
+        #slow - change deepcopy to shallow copy? 
         self.ranked_objs[0]['query_pts'] = copy.deepcopy(target_descriptors_data['parent_query_points'])
+        log_debug('Finished loading relational descriptors')
 
     def prepare_new_descriptors(self):
         log_info(f'\n\n\nCreating target descriptors for this parent model + child model, and these demos\nSaving to {target_desc_fname}\n\n\n')
@@ -801,6 +829,7 @@ class Pipeline():
 
     def load_models(self):
         for obj_rank in self.ranked_objs:
+            if 'model' in self.ranked_objs[obj_rank]: continue
             model_path = osp.join(path_util.get_rndf_model_weights(), self.ranked_objs[obj_rank]['model_path'])
             model = vnn_occupancy_network.VNNOccNet(latent_dim=256, model_type='pointnet', return_features=True, sigmoid=True).cuda()
             model.load_state_dict(torch.load(model_path))
@@ -810,6 +839,7 @@ class Pipeline():
 
     def load_optimizer(self, obj_rank):
         query_pts_rs = self.ranked_objs[obj_rank]['query_pts'] if 'query_pts_rs' not in self.ranked_objs[obj_rank] else self.ranked_objs[obj_rank]['query_pts_rs']
+        log_debug(f'Now loading optimizer for {obj_rank}')
         optimizer = OccNetOptimizer(
             self.ranked_objs[obj_rank]['model'],
             query_pts=self.ranked_objs[obj_rank]['query_pts'],
@@ -823,9 +853,9 @@ class Pipeline():
         if self.state == 0:
             ee_poses = self.find_pick_transform(0)
         elif self.state == 1:
-            ee_poses = self.find_place_transform(0, 1, self.last_ee)
+            ee_poses = self.find_place_transform(0, relational_rank=1, ee=self.last_ee)
         elif self.state == 2:
-            ee_poses = self.find_place_transform(0, 1, False)
+            ee_poses = self.find_place_transform(0, relational_rank=1)
         return ee_poses
 
     def find_pick_transform(self, target_rank):
@@ -875,10 +905,12 @@ class Pipeline():
         if ee:
             ee_end_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee), pose_transform=final_pose)
             preplace_offset_tf = util.list2pose_stamped(self.cfg.PREPLACE_OFFSET_TF)
-            preplace_horizontal_tf = util.list2pose_stamped(self.cfg.PREPLACE_HORIZONTAL_OFFSET_TF)
+            # preplace_direction_tf = util.list2pose_stamped(self.cfg.PREPLACE_HORIZONTAL_OFFSET_TF)
+
+            preplace_direction_tf = util.list2pose_stamped(self.cfg.PREPLACE_VERTICAL_OFFSET_TF)
 
             pre_ee_end_pose2 = util.transform_pose(pose_source=ee_end_pose, pose_transform=preplace_offset_tf)
-            pre_ee_end_pose1 = util.transform_pose(pose_source=pre_ee_end_pose2, pose_transform=preplace_horizontal_tf)        
+            pre_ee_end_pose1 = util.transform_pose(pose_source=pre_ee_end_pose2, pose_transform=preplace_direction_tf)        
 
                 # get pose that's straight up
             offset_pose = util.transform_pose(

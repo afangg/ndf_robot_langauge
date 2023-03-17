@@ -1,5 +1,5 @@
 from sentence_transformers import SentenceTransformer
-from sentence_transformers import util as sentence_util
+from sentence_transformers.util import pytorch_cos_sim
 from flair.models import SequenceTagger
 from flair.data import Sentence
 
@@ -17,9 +17,10 @@ def query_correspondance(existing_concepts, query):
     return: list of concepts sorted by similarity to the query
     '''
 
+    existing_concepts = existing_concepts.replace('_', ' ')
     concept_embeddings = llm.encode(existing_concepts, convert_to_tensor=True)
     target_embedding= llm.encode(query, convert_to_tensor=True)
-    scores = sentence_util.pytorch_cos_sim(target_embedding, concept_embeddings)
+    scores = pytorch_cos_sim(target_embedding, concept_embeddings)
     sorted_scores, idx = torch.sort(scores, descending=True)
     sorted_scores, idx = sorted_scores.flatten(), idx.flatten()
     idx = idx.detach().cpu().numpy()
