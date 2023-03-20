@@ -58,43 +58,49 @@ def constraint_grasp_open(cid=None):
     if cid is not None:
         p.removeConstraint(cid)
 
-def process_xq_data(data, shelf=True):
+def process_xq_data(data, table_obj=None):
     if 'gripper_pts_uniform' in data:
         return data['gripper_pts_uniform']
     else:
-        if shelf:
+        if table_obj==0:
             uniform_place_demo_pts = data['shelf_pointcloud_uniform']
             uniform_place_demo_pose_mat = util.matrix_from_pose(util.list2pose_stamped(data['shelf_pose_world']))
-        else:
+        elif table_obj==1:
             uniform_place_demo_pts = data['rack_pointcloud_uniform']
             uniform_place_demo_pose_mat = util.matrix_from_pose(util.list2pose_stamped(data['rack_pose_world']))
+        else:
+            print('ERROR')
+            return
 
         uniform_place_demo_pcd = trimesh.PointCloud(uniform_place_demo_pts)
         uniform_place_demo_pcd.apply_transform(uniform_place_demo_pose_mat)  # points used to represent the rack in demo pose
         uniform_place_demo_pts = np.asarray(uniform_place_demo_pcd.vertices)
         return uniform_place_demo_pts
 
-def process_xq_rs_data(data, shelf=True):
+def process_xq_rs_data(data, table_obj=None):
     if 'gripper_pts' in data:
         return data['gripper_pts']
     else:
-        if shelf:
+        if table_obj==0:
             gt_place_demo_pts = data['shelf_pointcloud_gt']
             gt_place_demo_pose_mat = util.matrix_from_pose(util.list2pose_stamped(data['shelf_pose_world']))
-        else:
+        elif table_obj==1:
             gt_place_demo_pts = data['rack_pointcloud_gt']
             gt_place_demo_pose_mat = util.matrix_from_pose(util.list2pose_stamped(data['rack_pose_world']))
+        else:
+            print('ERROR')
+            return
 
         gt_place_demo_pcd = trimesh.PointCloud(gt_place_demo_pts)
         gt_place_demo_pcd.apply_transform(gt_place_demo_pose_mat)  # points used to represent the rack in demo pose
         gt_place_demo_pts = np.asarray(gt_place_demo_pcd.vertices)
         return gt_place_demo_pts
 
-def process_demo_data(data, initial_pose=None, shelf=False):
+def process_demo_data(data, initial_pose=None, table_obj=None):
     if initial_pose is None:
         demo_info, initial_pose = grasp_demo(data)
     else:
-        demo_info = place_demo(data, initial_pose, shelf=shelf)
+        demo_info = place_demo(data, initial_pose, table_obj=table_obj)
 
     return demo_info, initial_pose
 
@@ -127,19 +133,21 @@ def grasp_demo(data):
 
     return target_info, data['obj_pose_world']
 
-def place_demo(place_data, initial_pose, shelf=True):
-    if shelf:
+def place_demo(place_data, initial_pose, table_obj=None):
+    if table_obj==0:
         print('Place on shelf')
         place_pcd_gt = 'shelf_pointcloud_gt'
         place_world = 'shelf_pose_world'
         place_pcd_observed = 'shelf_pointcloud_observed'
         place_pcd_uniform = 'shelf_pointcloud_uniform'
-    else:
+    elif table_obj==1:
         print('Place on rack')
         place_pcd_gt = 'rack_pointcloud_gt'
         place_world = 'rack_pose_world'
         place_pcd_observed = 'rack_pointcloud_observed'
         place_pcd_uniform = 'rack_pointcloud_uniform'
+    else:
+        print("ERROR")
 
     # place_data = np.load(place_demo_fn, allow_pickle=True)
     place_demo_obj_pts = place_data['object_pointcloud']  # observed shape points at start
@@ -259,8 +267,14 @@ def post_process_grasp_point(ee_pose, target_obj_pcd, thin_feature=True, grasp_v
             util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=util.list2pose_stamped(pregrasp_offset_tf)))
 
         ee_pose_mat = util.matrix_from_pose(util.list2pose_stamped(pre_ee_pose))
-        ee_mesh = trimesh.load('../floating/panda_gripper.obj')
+        import os, os.path as osp
+        gripper_fname = osp.join(os.environ['RNDF_SOURCE_DIR'], 'descriptions/franka_panda/meshes/panda_hand_full.obj')
+
+        ee_mesh = trimesh.load(gripper_fname)
         scene.add_geometry([ee_mesh], transform=ee_pose_mat)
+        marker = trimesh.creation.axis(origin_size=0.01, transform=util.matrix_from_pose(util.list2pose_stamped(ee_pose)))
+        scene.add_geometry([ee_mesh], transform=ee_pose_mat)
+        scene.add_geometry([marker])
         print('END EFFECTOR POSE:', ee_pose_mat)
 
         scene.show()

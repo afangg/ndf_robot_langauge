@@ -14,9 +14,10 @@ from pybullet_tools.utils import add_data_path, connect, dump_body, disconnect, 
     assign_link_colors, add_line, point_from_pose, remove_handles, BLUE, pairwise_collision, set_client, get_client, pairwise_link_collision, \
     plan_joint_motion, create_attachment, enable_real_time, disable_real_time, body_from_end_effector, set_pose, set_renderer
 
-from pybullet_tools.ikfast.franka_panda.ik import PANDA_INFO, FRANKA_URDF, FRANKA_URDF_2F140
-# FRANKA_URDF = osp.join(pb_planning_src, FRANKA_URDF)
-FRANKA_URDF = osp.join(pb_planning_src, FRANKA_URDF_2F140)
+#from pybullet_tools.ikfast.franka_panda.ik import PANDA_INFO, FRANKA_URDF, FRANKA_URDF_2F140
+from pybullet_tools.ikfast.franka_panda.ik import PANDA_INFO, FRANKA_URDF
+FRANKA_URDF = osp.join(pb_planning_src, FRANKA_URDF)
+#FRANKA_URDF = osp.join(pb_planning_src, FRANKA_URDF_2F140)
 print('FRANKA URDF: ', FRANKA_URDF)
 from pybullet_tools.ikfast.ikfast import get_ik_joints, either_inverse_kinematics, check_ik_solver
 

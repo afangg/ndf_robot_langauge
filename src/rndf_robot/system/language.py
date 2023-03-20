@@ -17,7 +17,8 @@ def query_correspondance(existing_concepts, query):
     return: list of concepts sorted by similarity to the query
     '''
 
-    existing_concepts = existing_concepts.replace('_', ' ')
+    #existing_concepts = existing_concepts.replace('_', ' ')
+    query = query.replace('_', ' ')
     concept_embeddings = llm.encode(existing_concepts, convert_to_tensor=True)
     target_embedding= llm.encode(query, convert_to_tensor=True)
     scores = pytorch_cos_sim(target_embedding, concept_embeddings)

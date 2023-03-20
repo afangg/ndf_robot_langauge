@@ -5,21 +5,18 @@ import numpy as np
 import torch
 import time
 import sys
-print(sys.path)
-
-sys.path.append('/data/pulkitag/data/afo/repos/ndf_robot_language/src/')
-print(sys.path)
+sys.path.append(os.environ['SOURCE_DIR'])
 
 import pybullet as p
 import rndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_network
 from rndf_robot.utils import util, trimesh_util
 from rndf_robot.utils import path_util
 
-from ndf_robot.utils.franka_ik import FrankaIK
+from rndf_robot.utils.franka_ik_ndf import FrankaIK
 from rndf_robot.opt.optimizer import OccNetOptimizer
 from rndf_robot.robot.multicam import MultiCams
 from rndf_robot.config.default_eval_cfg import get_eval_cfg_defaults
-from ndf_robot.utils.pipeline_util import (
+from rndf_robot.utils.pipeline_util import (
     safeCollisionFilterPair,
     safeRemoveConstraint,
     soft_grasp_close,
