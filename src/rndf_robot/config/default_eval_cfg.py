@@ -355,7 +355,8 @@ _C.BOWL.AVOID_SHAPENET_IDS = [
     'e4c871d1d5e3c49844b2fa2cac0778f5',
     'f6ffca90c543edf9d6438d5cb8c578c6',
     'f6ffca90c543edf9d6438d5cb8c578c6',
-    'd98455f19960f99ed684faddec3c0090'
+    'd98455f19960f99ed684faddec3c0090',
+    'da5f13f4048dbd72fcb8d8c6d4df8143'
 ]
 _C.BOWL.TEST_SHAPENET_IDS = [
     'f2ef5e5b49f2bb8340dfb1e6c8f5a333',

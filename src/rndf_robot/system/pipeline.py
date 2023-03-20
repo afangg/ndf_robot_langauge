@@ -329,8 +329,9 @@ class Pipeline():
         '''
         log_debug('All demo labels: %s' %all_demos.keys())
         while True:
-            corresponding_concept, query_text = self.ask_query()
-            if not corresponding_concept: return
+            query = self.ask_query()
+            if not query: return
+            corresponding_concept, query_text = query
             demos = get_concept_demos(corresponding_concept)
             if not len(demos):
                 log_warn('No demos correspond to the query! Try a different prompt')

@@ -11,7 +11,7 @@ use_py_seg = False
 generate_new_scene = True
 
 config = dict(
-    objects={'bowl': {(1,0,0.1,1):1, (0.1,0.8,0,1):1, (0,0.5,0.8,1):1},}
+    objects={'mug': {(1,0,0.1,1):1, (0,0.5,0.8,1):1}}
 )
 def main(pipeline, generate_new_scene=True):
     # torch.manual_seed(args.seed)
@@ -19,7 +19,8 @@ def main(pipeline, generate_new_scene=True):
         pipeline.setup_random_scene(config)
 
     prompt = pipeline.prompt_user()
-    if not prompt: pipeline.step()
+    if not prompt: 
+        return pipeline.step()
     corresponding_concept, query_text = prompt
     concept, keywords = pipeline.identify_classes_from_query(query_text, corresponding_concept)
     if use_privilege_info:
