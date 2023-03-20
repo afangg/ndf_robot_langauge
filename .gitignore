@@ -1,2 +1,6 @@
 *.pyc
-src/rndf_robot/eval/visualization
+**/visualization
+**/demos
+**/release_demos
+**/objects
+**/__pycache__
