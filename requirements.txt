@@ -26,7 +26,7 @@ meshcat
 pyglet
 healpy
 configargparse
-#open3d>=0.11
+open3d>=0.11
 pynput>=1.7.3
 ipython
 tqdm
@@ -41,4 +41,5 @@ mesh-to-sdf>=0.0.14
 cython
 urdfpy
 sentence-transformers
+flair
 # git+https://github.com/Improbable-AI/airobot.git@qa
