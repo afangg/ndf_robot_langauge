@@ -3,4 +3,6 @@
 **/demos
 **/release_demos
 **/objects
-**/__pycache__
+**/__pycache_
+log.txt
+**/*viz
