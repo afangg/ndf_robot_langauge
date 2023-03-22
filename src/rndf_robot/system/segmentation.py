@@ -113,7 +113,7 @@ def draw_bounding_box_on_image(image,
     text_bottom -= text_height - 2 * margin
 
 
-def owlvit_detect(image, descriptions, score_threshold=0.055, show_seg=False):
+def owlvit_detect(image, descriptions, score_threshold=0.05, show_seg=False):
     '''
     Detects objects in image that corresponding to a given description and returns the bounding boxes
     of the parts of the image that match above a certain threshold

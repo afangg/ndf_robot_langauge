@@ -63,9 +63,7 @@ class OccNetOptimizer:
         # util.safe_makedirs(self.debug_viz_path)
         # util.safe_makedirs(self.viz_path)
         # self.viz_files =  []
-        print('Start creating rot_grid?')
         self.rot_grid = util.generate_healpix_grid(size=1e6)
-        print('Finished creating rot_grid?')
         # self.rot_grid = None
 
         self.qp_tf = np.eye(4)

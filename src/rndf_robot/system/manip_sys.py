@@ -11,7 +11,8 @@ use_py_seg = False
 generate_new_scene = True
 
 config = dict(
-    objects={'mug': {(1,0,0.1,1):1, (0,0.5,0.8,1):1}}
+    # objects={'mug': {(1,0,0.1,1):1, (0,0.5,0.8,1):1}}
+    objects = {'bowl': {(1,0,0.1,1):1, (0,1,0.1,1):1, (0,0.5,0.8,1):1}}
 )
 def main(pipeline, generate_new_scene=True):
     # torch.manual_seed(args.seed)
@@ -62,6 +63,7 @@ if __name__ == "__main__":
     parser.add_argument('--iterations', type=int, default=5)
 
     parser.add_argument('--pybullet_viz', action='store_true')
+    parser.add_argument('--show_pcds', action='store_true')
     parser.add_argument('--opt_visualize', action='store_true')
     parser.add_argument('--grasp_viz', action='store_true')
 

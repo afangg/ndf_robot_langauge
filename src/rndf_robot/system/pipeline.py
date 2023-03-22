@@ -555,9 +555,9 @@ class Pipeline():
                         continue
                 new_pcds.append(pcd)
             self.ranked_objs[obj_rank]['pcd'] = new_pcds.pop(-1)
-            # if self.args.debug:
-            #     log_debug(f'Best score was {score}')
-            #     trimesh_util.trimesh_show([self.ranked_objs[obj_rank]['pcd']])
+            if self.args.show_pcds:
+                log_debug(f'Best score was {score}')
+                trimesh_util.trimesh_show([self.ranked_objs[obj_rank]['pcd']])
 
         with self.viz.recorder.meshcat_scene_lock:
             for _, obj in self.ranked_objs.items():
@@ -982,7 +982,7 @@ class Pipeline():
     def cascade_ik(self, ee_pose):
         jnt_pos = None
         if jnt_pos is None:
-            jnt_pos = self.ik_helper.get_feasible_ik(ee_pose, verbose=True)
+            jnt_pos = self.ik_helper.get_feasible_ik(ee_pose, verbose=False)
             if jnt_pos is None:
                 jnt_pos = self.ik_helper.get_ik(ee_pose)
                 if jnt_pos is None:

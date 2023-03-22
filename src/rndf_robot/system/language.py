@@ -1,5 +1,5 @@
 from sentence_transformers import SentenceTransformer
-from sentence_transformers.util import pytorch_cos_sim
+from sentence_transformers.util import pytorch_cos_sim, dot_score
 from flair.models import SequenceTagger
 from flair.data import Sentence
 
@@ -7,6 +7,8 @@ import torch
 import numpy as np
 
 llm = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+tagger = SequenceTagger.load('flair/chunk-english')
+
 ARTICLES = {'a', 'an', 'the'}
 
 def query_correspondance(existing_concepts, query):
@@ -19,9 +21,9 @@ def query_correspondance(existing_concepts, query):
 
     #existing_concepts = existing_concepts.replace('_', ' ')
     query = query.replace('_', ' ')
-    concept_embeddings = llm.encode(existing_concepts, convert_to_tensor=True)
-    target_embedding= llm.encode(query, convert_to_tensor=True)
-    scores = pytorch_cos_sim(target_embedding, concept_embeddings)
+    concept_embeddings = llm.encode(existing_concepts, convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True)
+    target_embedding= llm.encode(query, convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True)
+    scores = dot_score(target_embedding, concept_embeddings)
     sorted_scores, idx = torch.sort(scores, descending=True)
     sorted_scores, idx = sorted_scores.flatten(), idx.flatten()
     idx = idx.detach().cpu().numpy()
@@ -34,7 +36,6 @@ def chunk_query(query):
 
     return: {phrase: label}
     '''
-    tagger = SequenceTagger.load('flair/chunk-english')
     sentence = Sentence(query)
     tagger.predict(sentence)
     sentence_dic = {}
