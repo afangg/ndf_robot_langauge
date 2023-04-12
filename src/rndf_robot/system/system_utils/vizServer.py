@@ -6,8 +6,8 @@ import time
 
 class VizServer():
 
-    def __init__(self, pb_client) -> None:
-        zmq_url = 'tcp://127.0.0.1:6000'
+    def __init__(self, pb_client, port_vis=6000) -> None:
+        zmq_url = f'tcp://127.0.0.1:{port_vis}'
         log_warn(f'Starting meshcat at zmq_url: {zmq_url}')
         self.mc_vis = meshcat.Visualizer(zmq_url=zmq_url)
         self.mc_vis['scene'].delete()

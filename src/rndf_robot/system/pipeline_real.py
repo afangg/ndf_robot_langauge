@@ -14,7 +14,6 @@ from rndf_robot.utils import path_util
 
 from rndf_robot.utils.franka_ik_ndf import FrankaIK
 from rndf_robot.opt.optimizer import OccNetOptimizer
-from rndf_robot.robot.multicam import MultiCams
 from rndf_robot.config.default_eval_cfg import get_eval_cfg_defaults
 from rndf_robot.utils.pipeline_util import (
     safeCollisionFilterPair,
@@ -29,21 +28,23 @@ from rndf_robot.utils.pipeline_util import (
     constraint_obj_world,
 )
 from rndf_robot.utils.rndf_utils import infer_relation_intersection, create_target_descriptors
-from segmentation import detect_bbs, get_label_pcds, extend_pcds
-from language import query_correspondance, chunk_query, create_keyword_dic
-from demos import all_demos, get_concept_demos, create_target_desc_subdir, get_model_paths
-import objects
+from system_utils.segmentation import detect_bbs, get_label_pcds, extend_pcds
+from system_utils.language import query_correspondance, chunk_query, create_keyword_dic
+from system_utils.demos import all_demos, get_concept_demos, create_target_desc_subdir, get_model_paths
+import system_utils.objects as objects
 
 from airobot import Robot, log_info, set_log_level, log_warn, log_debug
 from airobot.utils import common
+
+import pyrealsense2 as rs
+from rndf_robot.robot.simple_multicam import MultiRealsenseLocal
+from rndf_robot.system.system_utils.realsense import RealsenseLocal, enable_devices, pipeline_stop
 
 from IPython import embed;
 
 class Pipeline():
 
     def __init__(self, args):
-        log_debug('Pipeline initialized')
-        self.tables = ['table_rack.urdf', 'table_shelf.urdf']
         self.args = args
 
         self.random_pos = False
@@ -107,6 +108,7 @@ class Pipeline():
                 return True
 
     def setup_client(self):
+        #TODO: Setup real robot - hopefully interfacing isn't too different than Pybullet robot
         self.robot = Robot('franka', pb_cfg={'gui': self.args.pybullet_viz}, arm_cfg={'self_collision': False, 'seed': self.args.seed})
         self.ik_helper = FrankaIK(gui=False)
         
@@ -122,18 +124,112 @@ class Pipeline():
         self.setup_cams()
 
     def setup_cams(self):
-        self.robot.cam.setup_camera(
-            focus_pt=[0.4, 0.0, self.cfg.TABLE_Z],
-            dist=0.9,
-            yaw=45,
-            pitch=-25,
-            roll=0)
-        self.cams = MultiCams(self.cfg.CAMERA, self.robot.pb_client, n_cams=self.cfg.N_CAMERAS)
-        cam_info = {}
-        cam_info['pose_world'] = []
-        for cam in self.cams.cams:
-            cam_info['pose_world'].append(util.pose_from_matrix(cam.cam_ext_mat))
+        # self.robot.cam.setup_camera(
+        #     focus_pt=[0.4, 0.0, self.cfg.TABLE_Z],
+        #     dist=0.9,
+        #     yaw=45,
+        #     pitch=-25,
+        #     roll=0)
+        serials = [
+            '143122065292',
+            '840412060551',
+            '215122255998',
+            '843112073228'
+        ]
 
+        prefix = 'cam_'
+        camera_names = [f'{prefix}{i}' for i in range(len(serials))]
+        cam_index = [int(idx) for idx in self.args.cam_index]
+        cam_list = [camera_names[int(idx)] for idx in cam_index]        
+
+        calib_dir = osp.join(path_util.get_rndf_src(), 'robot/camera_calibration_files')
+        calib_filenames = [osp.join(calib_dir, f'cam_{idx}_calib_base_to_cam.json') for idx in cam_index]
+
+        self.cams = MultiRealsenseLocal(cam_names=cam_list, calib_filenames=calib_filenames)
+        
+        ctx = rs.context() # Create librealsense context for managing devices
+
+        # Define some constants
+        resolution_width = 640 # pixels
+        resolution_height = 480 # pixels
+        frame_rate = 30  # fps
+
+        # pipelines = enable_devices(serials, ctx, resolution_width, resolution_height, frame_rate)
+        self.pipelines = enable_devices(np.array(serials)[cam_index], ctx, resolution_width, resolution_height, frame_rate)
+        self.cam_interface = RealsenseLocal()
+
+        #TODO: Connect to the Realsense cameras
+
+
+    def get_real_pcd(self):
+        pcd_pts = []
+        pcd_dict_list = []
+        cam_int_list = []
+        cam_poses_list = []
+        rgb_imgs = []
+        depth_imgs = []
+        for idx, cam in enumerate(self.cams.cams):
+            cam_intrinsics = self.cam_interface.get_intrinsics_mat(self.pipelines[idx])
+            rgb, depth = self.cam_interface.get_rgb_and_depth_image(self.pipelines[idx])
+
+            cam.cam_int_mat = cam_intrinsics
+            cam._init_pers_mat()
+            cam_pose_world = cam.cam_ext_mat
+            cam_int_list.append(cam_intrinsics)
+            cam_poses_list.append(cam_pose_world)
+
+            valid = depth < cam.depth_max
+            valid = np.logical_and(valid, depth > cam.depth_min)
+            depth_valid = copy.deepcopy(depth)
+            depth_valid[np.logical_not(valid)] = 0.0 # not exactly sure what to put for invalid depth
+            depth_imgs.append(depth_valid)
+
+            pcd_cam = cam.get_pcd(in_world=False, filter_depth=False, rgb_image=rgb, depth_image=depth_valid)[0]
+            pcd_cam_img = pcd_cam.reshape(depth.shape[0], depth.shape[1], 3)
+            pcd_world = util.transform_pcd(pcd_cam, cam_pose_world)
+            pcd_world_img = pcd_world.reshape(depth.shape[0], depth.shape[1], 3)
+            pcd_dict = {
+                'world': pcd_world,
+                'cam': pcd_cam_img,
+                'cam_img': pcd_cam,
+                'world_img': pcd_world_img,
+                'cam_pose_mat': cam_pose_world
+            }
+
+            pcd_pts.append(pcd_world)
+            pcd_dict_list.append(pcd_dict)
+
+        pcd_full = np.concatenate(pcd_pts, axis=0)
+        return pcd_full
+
+    def get_real_pcd_cam(self, idx, rgb, depth):
+        embed()
+        cam = self.cams.cams[idx]
+        cam_intrinsics = self.cam_interface.get_intrinsics_mat(self.pipelines[idx])
+
+        cam.cam_int_mat = cam_intrinsics
+        cam._init_pers_mat()
+        cam_pose_world = cam.cam_ext_mat
+
+        valid = depth < cam.depth_max
+        valid = np.logical_and(valid, depth > cam.depth_min)
+        depth_valid = copy.deepcopy(depth)
+        depth_valid[np.logical_not(valid)] = 0.0 # not exactly sure what to put for invalid depth
+
+        pcd_cam = cam.get_pcd(in_world=False, filter_depth=False, rgb_image=rgb, depth_image=depth_valid)[0]
+        pcd_cam_img = pcd_cam.reshape(depth.shape[0], depth.shape[1], 3)
+        pcd_world = util.transform_pcd(pcd_cam, cam_pose_world)
+        pcd_world_img = pcd_world.reshape(depth.shape[0], depth.shape[1], 3)
+        # pcd_dict = {
+        #     'world': pcd_world,
+        #     'cam': pcd_cam_img,
+        #     'cam_img': pcd_cam,
+        #     'world_img': pcd_world_img,
+        #     'cam_pose_mat': cam_pose_world
+        # }
+
+        return pcd_world
+    
     def setup_table(self):            
         table_fname = osp.join(path_util.get_rndf_descriptions(), 'hanging/table')
         table_urdf_file = 'table_manual.urdf'
@@ -179,7 +275,7 @@ class Pipeline():
                     }
                     self.obj_info[obj_id] = obj
 
-
+    #TODO: Remove simulator object calls
     def add_obj(self, obj_class, scale_default=None, color=None):
         obj_file = objects.choose_obj(self.meshes_dic, obj_class)
         x_low, x_high = self.cfg.OBJ_SAMPLE_X_HIGH_LOW
@@ -303,19 +399,6 @@ class Pipeline():
             log_info('Config file %s does not exist, using defaults' % config_fname)
         cfg.freeze()
         return cfg
-
-    # def get_obj_cfgs(self):
-    #     # object specific configs
-    #     obj_cfg = get_obj_cfg_defaults()
-    #     config = 'base_config' if len(self.test_objs) != 1 else self.test_objs[0]
-    #     obj_config_name = osp.join(path_util.get_rndf_config(), config+'_obj_cfg.yaml')
-    #     if osp.exists(obj_config_name):
-    #         obj_cfg.merge_from_file(obj_config_name)
-    #         log_debug("Set up config settings for %s" % self.test_obj)
-    #     else:
-    #         log_warn(f'Config file {obj_config_name} does not exist, using defaults')
-    #     # obj_cfg.freeze()
-    #     return obj_cfg
         
     #################################################################################################
     # Language
@@ -374,51 +457,10 @@ class Pipeline():
             
             if corresponding_concept:
                 break
-
-        # if demos is not None and self.table_model is None:
-        #     demo_file = np.load(demos[0], allow_pickle=True)
-        #     if 'table_urdf' in demo_file:
-        #         self.table_model = demo_file['table_urdf'].item()
         return corresponding_concept, query_text
 
     #################################################################################################
-    # Set up scene
-
-    # def setup_scene_objs(self):
-    #     ranked_objs = []
-    #     ranked_objs = list(self.ranked_objs.keys())
-    #     log_warn('Setting up new objects %s'% ranked_objs)
-
-    #     ids = []
-    #     for obj_key in ranked_objs:
-    #         self.ranked_objs[obj_key]['shapenet_id'] = random.sample(self.obj_meshes[self.scene_dict[obj_key]['class']], 1)[0]
-    #         log_debug('Loading %s shape: %s' % (obj_key, self.scene_dict[obj_key]['shapenet_id']))
-
-    #         obj_class = self.scene_dict[obj_key]['class']
-    #         self.scene_dict[obj_key]['file_path'] = objects.choose_obj(obj_class) 
-    #         self.scene_dict[obj_key]['scale_default'] = objects.scale_default[obj_class] 
-
-    #     if self.scene_dict['child']['class'] == 'bottle' and 'parent' in self.scene_dict:
-    #         if self.scene_dict['parent']['class'] == 'container':
-    #             parent_extents, child_extents = self.get_extents('parent'), self.get_extents('child')
-    #             # IF THE BOTTLE ISN'T SMALL ENOUGH THAN THE BOX IT WON'T FIT SO SCALE THE BOX UP
-    #             if np.max(child_extents) > (0.75 * np.min(parent_extents[:-1])):
-    #                 # scale up the container size so that the bottle is more likely to fit inside
-    #                 new_parent_scale = np.max(child_extents) * (np.random.random() * (2 - 1.5) + 1.5) / np.min(parent_extents[:-1])
-    #                 self.scene_dict['parent']['scale_default'] = new_parent_scale
-    #                 ext_str = f'\Parent extents: {", ".join([str(val) for val in parent_extents])}, \Child extents: {", ".join([str(val) for val in child_extents])}\n'
-    #                 log_info(ext_str)
-        
-    #     for obj_key in obj_keys:
-    #         obj_id, obj_pose_world, o_cid = self.add_test_objs(obj_key)
-    #         self.scene_dict[obj_key]['obj_id'] = obj_id
-    #         self.scene_dict[obj_key]['pose'] = obj_pose_world
-    #         self.scene_dict[obj_key]['o_cid'] = o_cid
-    #         ids.append(obj_id)
-        
-    #     # if 'parent' in self.scene_dict:
-    #     #     safeCollisionFilterPair(self.scene_dict['parent']['obj_id'], self.scene_dict['child']['obj_id'], -1, -1, enableCollision=True)
-    #     return ids
+    # Misc?
 
     def associate_ranked_objs(self, relevent_objs):
         '''
@@ -524,6 +566,7 @@ class Pipeline():
             log_debug(relation)
 
     def assign_pcds(self, labels_to_pcds, obj_ranks=None):
+        embed()
         assigned_centroids = []
         for obj_rank, obj in self.ranked_objs.items():
             if 'pcd' in obj:
@@ -565,47 +608,6 @@ class Pipeline():
                 color = [random.randint(0,255), random.randint(0,255), random.randint(0,255)]
                 util.meshcat_pcd_show(self.viz.mc_vis, obj['pcd'], color=color, name=label)
 
-
-    def segment_scene_pb(self, obj_ids=None):
-        if not obj_ids:
-            obj_ids = list(self.obj_info.keys())
-            
-        pc_obs_info = {}
-        pc_obs_info['pcd'] = {} #  
-        pc_obs_info['pcd_pts'] = {} #caption: [[pcd0], [pcd1], ...]
-        for obj_id in obj_ids:
-            pc_obs_info['pcd_pts'][obj_id] = []
-
-        for i, cam in enumerate(self.cams.cams): 
-            # get image and raw point cloud
-            rgb, depth, pyb_seg = cam.get_images(get_rgb=True, get_depth=True, get_seg=True)
-            pts_raw, _ = cam.get_pcd(in_world=True, rgb_image=rgb, depth_image=depth, depth_min=0.0, depth_max=np.inf)
-
-            seg = pyb_seg
-            # flatten and find corresponding pixels in segmentation mask
-            flat_seg = seg.flatten()
-            for obj_id in obj_ids:
-                obj_inds = np.where(flat_seg == obj_id)                
-                obj_pts = pts_raw[obj_inds[0], :]
-                pc_obs_info['pcd_pts'][obj_id].append(util.crop_pcd(obj_pts))
-
-        for obj_id, obj_pcd_pts in pc_obs_info['pcd_pts'].items():
-            if not obj_pcd_pts:
-                log_warn('WARNING: COULD NOT FIND RELEVANT OBJ')
-                break
-
-            target_obj_pcd_obs = np.concatenate(obj_pcd_pts, axis=0)  # object shape point cloud
-            target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
-            inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
-            target_obj_pcd_obs = target_obj_pcd_obs[inliers]
-            self.obj_info[obj_id]['pcd'] = target_obj_pcd_obs
-
-        with self.viz.recorder.meshcat_scene_lock:
-            for obj_id, obj in self.obj_info.items():
-                label = 'scene/%s_pcd' % obj_id
-                color = [random.randint(0,255), random.randint(0,255), random.randint(0,255)]
-                util.meshcat_pcd_show(self.viz.mc_vis, obj['pcd'], color=color, name=label)
-
     def segment_scene(self, captions=None):
         '''
         @obj_captions: list of object captions to have CLIP detect
@@ -623,9 +625,10 @@ class Pipeline():
 
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
-            rgb, depth, pyb_seg = cam.get_images(get_rgb=True, get_depth=True, get_seg=True)
-            pts_raw, _ = cam.get_pcd(in_world=True, rgb_image=rgb, depth_image=depth, depth_min=0.0, depth_max=np.inf)
-
+            # rgb, depth, _ = cam.get_images(get_rgb=True, get_depth=True, get_seg=True)
+            rgb, depth = self.cam_interface.get_rgb_and_depth_image(self.pipelines[i])
+            # pts_raw, _ = cam.get_pcd(in_world=True, rgb_image=rgb, depth_image=depth, depth_min=0.0, depth_max=np.inf)
+            pts_raw = self.get_real_pcd_cam(i, rgb, depth)
             height, width, _ = rgb.shape
             pts_2d = pts_raw.reshape((height, width, 3))
             obj_bbs, cam_scores = detect_bbs(rgb, captions)
@@ -639,11 +642,10 @@ class Pipeline():
                     label_to_pcds[obj_label], label_to_scores[obj_label] = cam_pcds, cam_scores[obj_label]
                 else:
                     label_to_pcds[obj_label], label_to_scores[obj_label] = extend_pcds(cam_pcds, label_to_pcds[obj_label], 
-                                                                                       cam_scores[obj_label], label_to_scores[obj_label], threshold=threshold-0.01*i)
+                                                                                        cam_scores[obj_label], label_to_scores[obj_label], threshold=threshold-0.01*i)
                 log_debug(f'{obj_label} size is now {len(label_to_pcds[obj_label])}')
             
         pcds_output = {}
-
         for obj_label in captions:
             if obj_label not in label_to_pcds:
                 log_warn('WARNING: COULD NOT FIND RELEVANT OBJ')
@@ -953,29 +955,6 @@ class Pipeline():
             self.post_execution(obj_id)
             time.sleep(1.0)
 
-    def pre_execution(self, obj_id):
-        if self.state == 0:
-            if obj_id:
-                time.sleep(0.5)
-                # turn OFF collisions between robot and object / table, and move to pre-grasp pose
-                for i in range(p.getNumJoints(self.robot.arm.robot_id)):
-                    safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=self.table_id, linkIndexA=i, linkIndexB=-1, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
-                    safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=obj_id, linkIndexA=i, linkIndexB=-1, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
-            self.robot.arm.eetool.open()
-            time.sleep(0.5)
-        else:
-            # all_ids = []
-            # for _, obj_ids in self.all_scene_objs.items():
-            #     all_ids.extend(obj_ids)
-            
-            # for obj in all_ids:
-            #     for other_obj in all_ids:
-            #         if obj != other_obj:
-            #             print(obj['obj_id'], other_obj['obj_id'])
-            #             safeCollisionFilterPair(obj['obj_id'], other_obj['obj_id'], -1, -1, enableCollision=True)
-            if obj_id:
-                safeCollisionFilterPair(self.ranked_objs[1]['obj_id'], self.ranked_objs[0]['obj_id'], -1, -1, enableCollision=True)
-
     def get_iks(self, ee_poses):
         return [self.cascade_ik(pose) for pose in ee_poses]
     
@@ -986,6 +965,7 @@ class Pipeline():
             if jnt_pos is None:
                 jnt_pos = self.ik_helper.get_ik(ee_pose)
                 if jnt_pos is None:
+                    #TODO: Remove pybullet IK computer
                     jnt_pos = self.robot.arm.compute_ik(ee_pose[:3], ee_pose[3:])
         if jnt_pos is None:
             log_warn('Failed to find IK')
@@ -1024,14 +1004,23 @@ class Pipeline():
             time.sleep(0.025)
         self.robot.arm.set_jpos(plan[-1], wait=True)
 
-    def allow_pregrasp_collision(self, obj_id):
-        log_debug('Turning off collision between gripper and object for pre-grasp')
-        # turn ON collisions between robot and object, and close fingers
-        for i in range(p.getNumJoints(self.robot.arm.robot_id)):
-            safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=obj_id, linkIndexA=i, linkIndexB=-1, enableCollision=True, physicsClientId=self.robot.pb_client.get_client_id())
-            safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=self.table_id, linkIndexA=i, linkIndexB=self.placement_link_id, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
+    def pre_execution(self, obj_id):
+        #TODO: Remove turning on/off collisions
+        if self.state == 0:
+            if obj_id:
+                time.sleep(0.5)
+                # turn OFF collisions between robot and object / table, and move to pre-grasp pose
+                for i in range(p.getNumJoints(self.robot.arm.robot_id)):
+                    safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=self.table_id, linkIndexA=i, linkIndexB=-1, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
+                    safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=obj_id, linkIndexA=i, linkIndexB=-1, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
+            self.robot.arm.eetool.open()
+            time.sleep(0.5)
+        else:
+            if obj_id:
+                safeCollisionFilterPair(self.ranked_objs[1]['obj_id'], self.ranked_objs[0]['obj_id'], -1, -1, enableCollision=True)
 
     def post_execution(self, obj_id):
+        #TODO: Remove turning on/off collisions
         if self.state == 0:
             # turn ON collisions between robot and object, and close fingers
             if obj_id:

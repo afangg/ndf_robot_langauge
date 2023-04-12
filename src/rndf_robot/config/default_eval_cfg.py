@@ -33,8 +33,10 @@ _C.PLACEMENT_OBJECTS.SHELF_MESH_FILE = 'hanging/table/shelf_back.obj'
 _C.PLACEMENT_OBJECTS.SHELF_SCALE = [0.75, 0.75, 0.5]
 
 # boundaries within which to sample initial object poses
-_C.OBJ_SAMPLE_X_HIGH_LOW = [0.4, 0.5]
-_C.OBJ_SAMPLE_Y_HIGH_LOW = [-0.4, 0.4]
+# _C.OBJ_SAMPLE_X_HIGH_LOW = [0.4, 0.5]
+# _C.OBJ_SAMPLE_Y_HIGH_LOW = [-0.4, 0.4]
+_C.OBJ_SAMPLE_X_HIGH_LOW = [0.475, 0.5]
+_C.OBJ_SAMPLE_Y_HIGH_LOW = [-0.275, 0.0]
 
 # amounts to scale the meshes
 _C.MESH_SCALE_DEFAULT = 0.3
