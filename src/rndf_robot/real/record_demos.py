@@ -1,9 +1,7 @@
-import os, os.path as osp
-import sys
-# sys.path.append('/home/anthony/repos/research/ndf_robot_language/src')
-sys.path.append(osp.join(os.getenv('RNDF_SOURCE_DIR'), '..'))
-
-import time
+# import os
+# import sys
+# sys.path.append(osp.join(os.getenv('RNDF_SOURCE_DIR'), '..'))
+import os.path as osp
 import signal
 import random
 import cv2
@@ -11,8 +9,6 @@ import numpy as np
 import torch
 import argparse
 import copy
-import lcm
-import threading
 import meshcat
 import trimesh
 import open3d
@@ -22,12 +18,10 @@ from polymetis import GripperInterface, RobotInterface
 
 from airobot import log_info, log_warn, log_debug, log_critical, set_log_level
 
-from rndf_robot.utils import util, path_util, lcm_util, trimesh_util
-from rndf_robot.utils.real_util import RealImageLCMSubscriber, RealCamInfoLCMSubscriber
+from rndf_robot.utils import util, path_util
 from rndf_robot.utils.plotly_save import plot3d, plotly_scene_dict
 from rndf_robot.utils.visualize import PandaHand, Robotiq2F140Hand
-from rndf_robot.utils.record_demo_utils import DefaultQueryPoints, manually_segment_pcd, convert_wrist2tip, convert_tip2wrist
-# from rndf_robot.config.default_real_demo_cfg import get_real_demo_cfg_defaults
+from rndf_robot.utils.record_demo_utils import DefaultQueryPoints, manually_segment_pcd
 
 from rndf_robot.utils.franka_ik import FrankaIK #, PbPlUtils
 from rndf_robot.robot.simple_multicam import MultiRealsenseLocal
@@ -35,7 +29,6 @@ from rndf_robot.robot.simple_multicam import MultiRealsenseLocal
 from rndf_robot.config.default_multi_realsense_cfg import get_default_multi_realsense_cfg
 from rndf_robot.utils.real.traj_util import PolymetisTrajectoryUtil
 from rndf_robot.utils.real.plan_exec_util import PlanningHelper
-# from rndf_robot.utils.real_util.perception_util import PerceptionHelper, RealsenseInterface, enable_devices, 
 from rndf_robot.utils.real.perception_util import RealsenseInterface, enable_devices
 from rndf_robot.utils.real.polymetis_util import PolymetisHelper
 
@@ -126,13 +119,6 @@ def main(args):
     planning.set_gripper_open_pos(gripper_open_pos)
     planning.gripper_open()
 
-    # lc = lcm.LCM("udpm://239.255.76.67:7667?ttl=1")
-    # lc_th = threading.Thread(target=handle_thread, args=(lc,))
-    # lc_th.daemon = True
-    # lc_th.start()
-    # # lc_handler_manager = lcm_util.LCMHandleThread()
-    # # lc = lc_handler_manager.get_dispatch()
-
     if args.gripper_type == '2f140':
         grasp_pose_viz = Robotiq2F140Hand()
         place_pose_viz = Robotiq2F140Hand()
@@ -145,7 +131,7 @@ def main(args):
     place_pose_viz.meshcat_show(mc_vis, name_prefix='place_pose')
 
 
-    # setup camera interfaces as LCM subscribers
+    # setup camera interfaces 
     rs_cfg = get_default_multi_realsense_cfg()
     serials = rs_cfg.SERIAL_NUMBERS
 
@@ -153,23 +139,6 @@ def main(args):
     camera_names = [f'{prefix}{i}' for i in range(len(serials))]
     cam_list = [camera_names[int(idx)] for idx in args.cam_index]
     serials = [serials[int(idx)] for idx in args.cam_index]
-
-    # rgb_topic_name_suffix = rs_cfg.RGB_LCM_TOPIC_NAME_SUFFIX
-    # depth_topic_name_suffix = rs_cfg.DEPTH_LCM_TOPIC_NAME_SUFFIX
-    # info_topic_name_suffix = rs_cfg.INFO_LCM_TOPIC_NAME_SUFFIX
-    # pose_topic_name_suffix = rs_cfg.POSE_LCM_TOPIC_NAME_SUFFIX
-
-    # # update the topic names based on each individual camera
-    # rgb_sub_names = [f'{cam_name}_{rgb_topic_name_suffix}' for cam_name in camera_names]
-    # depth_sub_names = [f'{cam_name}_{depth_topic_name_suffix}' for cam_name in camera_names]
-    # info_sub_names = [f'{cam_name}_{info_topic_name_suffix}' for cam_name in camera_names]
-    # pose_sub_names = [f'{cam_name}_{pose_topic_name_suffix}' for cam_name in camera_names]
-
-    # img_subscribers = []
-    # for i, name in enumerate(cam_list):
-    #     img_sub = RealImageLCMSubscriber(lc, rgb_sub_names[i], depth_sub_names[i])
-    #     info_sub = RealCamInfoLCMSubscriber(lc, pose_sub_names[i], info_sub_names[i])
-    #     img_subscribers.append((name, img_sub, info_sub))
 
     calib_dir = osp.join(path_util.get_rndf_src(), 'robot/camera_calibration_files')
     calib_filenames = [osp.join(calib_dir, f'cam_{idx}_calib_base_to_cam.json') for idx in args.cam_index]
@@ -201,6 +170,8 @@ def main(args):
 
     # rack_mesh_file = osp.join(path_util.get_rndf_descriptions(), cfg.PLACEMENT_OBJECTS.RACK_MESH_FILE)
     # shelf_mesh_file = osp.join(path_util.get_rndf_descriptions(), cfg.PLACEMENT_OBJECTS.SHELF_MESH_FILE)
+    # rack_mesh_file = osp.join(path_util.get_rndf_descriptions(), 'hanging/rack.obj') 
+    # shelf_mesh_file = osp.join(path_util.get_rndf_descriptions(), 'hanging/shelf.obj')
 
     external_object_meshes = {
         'gripper_panda': gripper_mesh_file_panda,
@@ -518,16 +489,16 @@ def main(args):
                 obj_model_file=None,
                 obj_model_file_dec=None,
                 gripper_pts=query_point_info.external_object_qp_dict[f'gripper_{args.gripper_type}']['surface'],
-                rack_pointcloud_observed=rack_pcd_pts,
-                rack_pointcloud_gt=query_point_info.external_object_qp_dict['rack']['surface'],
-                rack_pointcloud_gaussian=query_point_info.external_object_qp_dict['rack']['gaussian'],
-                rack_pointcloud_uniform=query_point_info.external_object_qp_dict['rack']['uniform'],
-                rack_pose_world=rack_pose_world,
-                rack_contact_pose=rack_contact_pose,
-                shelf_pose_world=shelf_pose_world,
-                shelf_pointcloud_observed=shelf_pcd_pts,
-                shelf_pointcloud_uniform=query_point_info.external_object_qp_dict['shelf']['uniform'],
-                shelf_pointcloud_gt=query_point_info.external_object_qp_dict['shelf']['surface'],
+                # rack_pointcloud_observed=rack_pcd_pts,
+                # rack_pointcloud_gt=query_point_info.external_object_qp_dict['rack']['surface'],
+                # rack_pointcloud_gaussian=query_point_info.external_object_qp_dict['rack']['gaussian'],
+                # rack_pointcloud_uniform=query_point_info.external_object_qp_dict['rack']['uniform'],
+                # rack_pose_world=rack_pose_world,
+                # rack_contact_pose=rack_contact_pose,
+                # shelf_pose_world=shelf_pose_world,
+                # shelf_pointcloud_observed=shelf_pcd_pts,
+                # shelf_pointcloud_uniform=query_point_info.external_object_qp_dict['shelf']['uniform'],
+                # shelf_pointcloud_gt=query_point_info.external_object_qp_dict['shelf']['surface'],
                 custom_query_points=query_point_info.custom_query_points,
                 table_urdf=None,
                 pcd_raw=full_pcd,
