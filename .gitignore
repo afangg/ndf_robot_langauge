@@ -7,3 +7,4 @@
 log.txt
 **/*viz
 **/eval_data
+**/**.egg-info
