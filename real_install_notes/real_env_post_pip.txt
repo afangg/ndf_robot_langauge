@@ -1,0 +1,7 @@
+# only if lcm and detectron2 are needed!
+
+cd /path/to/lcm/lcm-python
+pip install .
+
+cd /path/to/detectron2
+pip install -e .

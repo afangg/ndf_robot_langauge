@@ -46,7 +46,8 @@ class PandaHand:
             all_tf[:-1, -1] = [0, 0, -0.105]
         else:
             # rotate
-            all_tf[:-1, :-1] = R.from_euler('xyz', [0., 0., -(np.pi + np.pi/4)]).as_matrix()
+            # all_tf[:-1, :-1] = R.from_euler('xyz', [0., 0., -(np.pi + np.pi/4)]).as_matrix()
+            pass
 
         rf_tf = np.matmul(all_tf, rf_tf)
         lf_tf = np.matmul(all_tf, lf_tf)
@@ -96,14 +97,18 @@ class PandaHand:
             mc_vis[mc_name].set_transform(mc_mat)
 
 class Robotiq2F140Hand:
-    def __init__(self):
+    def __init__(self, grasp_frame=True):
         # self.hand_mesh_path = osp.join(path_util.get_rndf_descriptions(), 'franka_panda/meshes/visual/hand.obj')
         self.full_hand_mesh_path = osp.join(path_util.get_rndf_descriptions(), 'franka_panda/meshes/robotiq_2f140/full_hand_2f140.obj')
         self.full_hand = trimesh.load(self.full_hand_mesh_path)
 
         # offset
         all_tf = np.eye(4)
-        all_tf[:-1, -1] = [0, 0, -0.23]
+
+        if grasp_frame:
+            all_tf[:-1, -1] = [0, 0, -0.23]
+        else:
+            pass
 
         self.hand_home_pose = all_tf
 
