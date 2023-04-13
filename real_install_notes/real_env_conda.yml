@@ -1,4 +1,5 @@
-name: polymetis-ndf-llm-dep
+# name: polymetis-ndf-llm-dep
+name: polymetis-ndf-llm
 channels:
   - fair-robotics
   - aihabitat

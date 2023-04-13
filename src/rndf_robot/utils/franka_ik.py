@@ -30,10 +30,10 @@ from pybullet_tools.ikfast.ikfast import get_ik_joints, either_inverse_kinematic
 
 from airobot.utils import common
 
-sys.path.append(os.getenv('CGN_SRC_DIR'))
-from test_meshcat_pcd import viz_scene as V
-from test_meshcat_pcd import meshcat_pcd_show as VP
-# from test_meshcat_pcd import viz_pcd as VP
+# sys.path.append(os.getenv('CGN_SRC_DIR'))
+# from test_meshcat_pcd import viz_scene as V
+# from test_meshcat_pcd import meshcat_pcd_show as VP
+# # from test_meshcat_pcd import viz_pcd as VP
 
 from rndf_robot.utils import util
 # from rndf_robot.collision.collision_checker import PointCollision

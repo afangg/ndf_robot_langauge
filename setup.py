@@ -15,7 +15,7 @@ def read_requirements_file(filename):
 packages = find_packages('src')
 # Ensure that we don't pollute the global namespace.
 for p in packages:
-    assert p == 'ndf_robot' or p.startswith('ndf_robot.')
+    assert p == 'rndf_robot' or p.startswith('rndf_robot.')
 
 
 def pkg_files(directory):
@@ -26,17 +26,17 @@ def pkg_files(directory):
     return paths
 
 
-extra_pkg_files = pkg_files('src/ndf_robot/descriptions')
+extra_pkg_files = pkg_files('src/rndf_robot/descriptions')
 
 setup(
-    name='ndf_robot',
+    name='rndf_robot',
     author='Anthony Simeonov, Yilun Du',
     license='MIT',
     packages=packages,
     package_dir={'': 'src'},
     package_data={
-        'ndf_robot': extra_pkg_files,
+        'rndf_robot': extra_pkg_files,
     },
-    install_requires=read_requirements_file('requirements.txt') + ['airobot @ git+https://github.com/Improbable-AI/airobot.git@qa#egg=airobot']
+    # install_requires=read_requirements_file('requirements.txt') + ['airobot @ git+https://github.com/Improbable-AI/airobot.git@qa#egg=airobot']
 )
 

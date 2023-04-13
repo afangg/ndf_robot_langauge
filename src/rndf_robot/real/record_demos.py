@@ -61,7 +61,7 @@ def main(args):
     #############################################################################
     # Panda, IK, trajectory helper, planning + execution helper
 
-    mc_vis = meshcat.Visualizer(zmq_url='tcp://127.0.0.1:6000')
+    mc_vis = meshcat.Visualizer(zmq_url=f'tcp://127.0.0.1:{args.port_vis}')
     mc_vis['scene'].delete()
 
     # ik_helper = FrankaIK(gui=True, base_pos=[0, 0, 0], robotiq=(args.gripper_type=='2f140'), mc_vis=mc_vis)
@@ -656,6 +656,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
+    parser.add_argument('-p', '--port_vis', type=int, default=6000)
     parser.add_argument('--exp', type=str, default='debug_real_demo')
     parser.add_argument('--object_class', type=str, default='mug')
     parser.add_argument('--config', type=str, default='base_demo_cfg.yaml')
