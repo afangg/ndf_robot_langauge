@@ -8,3 +8,4 @@ log.txt
 **/*viz
 **/eval_data
 **/**.egg-info
+**/real_demo_data
