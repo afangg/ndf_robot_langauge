@@ -2,7 +2,7 @@
 **/visualization
 **/demos
 **/release_demos
-**/objects
+**/descriptions/objects
 **/__pycache__
 log.txt
 **/*viz

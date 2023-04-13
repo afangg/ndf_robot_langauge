@@ -66,7 +66,7 @@ obj
             if verb_flag:
                 verb_flag = not verb_flag
 
-        if label == 'VBP':
+        if label == 'VP':
             verb_flag = True
         
     return keywords

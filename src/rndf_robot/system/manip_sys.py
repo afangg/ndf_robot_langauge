@@ -1,5 +1,5 @@
 from pipeline import Pipeline 
-from vizServer import VizServer 
+from system_utils.vizServer import VizServer 
 
 import argparse
 from airobot import log_info, set_log_level, log_warn
@@ -7,12 +7,11 @@ from IPython import embed;
 
 random = True
 use_privilege_info = False
-use_py_seg = False
 generate_new_scene = True
 
 config = dict(
     # objects={'mug': {(1,0,0.1,1):1, (0,0.5,0.8,1):1}}
-    objects = {'bowl': {(1,0,0.1,1):1, (0,1,0.1,1):1, (0,0.5,0.8,1):1}}
+    objects = {'container': {(1,0,0.1,1):1}, 'mug': {(0,1,0.1,1):1}}
 )
 def main(pipeline, generate_new_scene=True):
     # torch.manual_seed(args.seed)
@@ -24,7 +23,7 @@ def main(pipeline, generate_new_scene=True):
         return pipeline.step()
     corresponding_concept, query_text = prompt
     concept, keywords = pipeline.identify_classes_from_query(query_text, corresponding_concept)
-    if use_privilege_info:
+    if pipeline.args.pb_seg:
         labels_to_pcds = pipeline.segment_scene_pb()
     else:
         labels_to_pcds = pipeline.segment_scene(keywords)
@@ -32,11 +31,7 @@ def main(pipeline, generate_new_scene=True):
         log_warn('WARNING: Target object not detected, resetting the scene')
         pipeline.reset()
         return
-    if pipeline.state == 0:
-        ranks = [0]
-    else:
-        ranks = [0,1]
-    
+    ranks = [0] if pipeline.state == 0 else [0,1]
     pipeline.assign_pcds(labels_to_pcds,ranks)
     
     pipeline.get_intial_model_paths(concept)
@@ -88,6 +83,10 @@ if __name__ == "__main__":
 
     parser.add_argument('--add_noise', action='store_true')
     parser.add_argument('--noise_idx', type=int, default=0)
+
+    parser.add_argument('--pb_seg', action='store_true')
+
+
     args = parser.parse_args()
 
     if args.debug:

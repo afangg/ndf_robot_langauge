@@ -14,7 +14,7 @@ from airobot.utils import common
 from airobot import log_info, log_warn, log_debug, log_critical, set_log_level
 
 import sys
-sys.path.append('/data/pulkitag/data/afo/repos/ndf_robot_language/src/')
+sys.path.append(os.environ['SOURCE_DIR'])
 
 from rndf_robot.utils import util, path_util
 
@@ -542,6 +542,10 @@ def main(args):
                                 rpy = np.random.rand(3) * (2 * np.pi / 3) - (np.pi / 3)
                                 ori = common.euler2quat([rpy[0], rpy[1], rpy[2]]).tolist()
                                 pose = util.list2pose_stamped(pos + ori)
+                            elif args.child_upside:
+                                ori = upright_orientation_dict[obj_class]
+                                ori[0] = -ori[0]
+                                pose = util.list2pose_stamped(pos + ori)
                             else:
                                 pose = util.list2pose_stamped(pos + upright_orientation_dict[obj_class])
                             pose_w_yaw = util.transform_pose(pose, util.pose_from_matrix(rand_yaw_T))
@@ -563,7 +567,7 @@ def main(args):
                                 rgba = color) 
 
                             o_cid = constraint_obj_world(obj_id, pos, ori)
-                            robot.pb_client.set_step_sim(False)
+                            robot.pb_client.set_step_sim(False)                            
                         else:
                             obj_id = robot.pb_client.load_geom(
                                 'mesh', 
@@ -868,6 +872,7 @@ if __name__ == "__main__":
     parser.add_argument('--rand_mesh_scale', action='store_true')
     parser.add_argument('--same_pose', action='store_true')
     parser.add_argument('--any_pose', action='store_true')
+    parser.add_argument('--child_upside', action='store_true')
     parser.add_argument('--parent_class', type=str, required=True)
     parser.add_argument('--child_class', type=str, required=True)
     parser.add_argument('--is_parent_shapenet_obj', action='store_true')

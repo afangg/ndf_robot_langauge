@@ -29,10 +29,10 @@ from rndf_robot.utils.pipeline_util import (
     constraint_obj_world,
 )
 from rndf_robot.utils.rndf_utils import infer_relation_intersection, create_target_descriptors
-from segmentation import detect_bbs, get_label_pcds, extend_pcds
-from language import query_correspondance, chunk_query, create_keyword_dic
-from demos import all_demos, get_concept_demos, create_target_desc_subdir, get_model_paths
-import objects
+from system_utils.segmentation import detect_bbs, get_label_pcds, extend_pcds
+from system_utils.language import query_correspondance, chunk_query, create_keyword_dic
+from system_utils.demos import all_demos, get_concept_demos, create_target_desc_subdir, get_model_paths
+import system_utils.objects as objects
 
 from airobot import Robot, log_info, set_log_level, log_warn, log_debug
 from airobot.utils import common
@@ -479,7 +479,6 @@ class Pipeline():
         @test_objs: list of relevant object classes to determine rank for
         @keywords: list of associated obj class, noun phrase, and verb flag as pairs of tuples in form (class, NP, True/False)
         '''
-
         # what's the best way to determine which object should be manipulated and which is stationary automatically?
         if self.state == 0:
             # only one noun phrase mentioned, probably the object to be moved
@@ -500,9 +499,9 @@ class Pipeline():
                 self.ranked_objs[priority_rank]['description'] = keyword[1]
                 self.ranked_objs[priority_rank]['potential_class'] = keyword[0]
             else:
-                if self.state != 2 and len(keywords) > 2:
+                if self.state != 2 and len(keywords) > 1:
                     log_warn('There is more than one noun mentioned in the query and unsure what to do')
-                    return
+                    # return
                 pair_1, pair_2 = keywords
 
                 if pair_1[2]:
@@ -514,8 +513,8 @@ class Pipeline():
 
                 for i in range(2):
                     self.ranked_objs[i] = {}
-                    self.ranked_objs[1]['description'] = pairs[i][1]
-                    self.ranked_objs[0]['potential_class'] = pairs[i][0]
+                    self.ranked_objs[i]['description'] = pairs[i][1]
+                    self.ranked_objs[i]['potential_class'] = pairs[i][0]
 
         target = 'Target - class:%s, descr: %s'% (self.ranked_objs[0]['potential_class'], self.ranked_objs[0]['description'])
         log_debug(target)
@@ -545,9 +544,17 @@ class Pipeline():
             else:
                 log_warn(f'Could not find pcd for ranked obj {obj_rank}')
                 continue
-            # just pick the last pcd
+
+            if self.args.pb_seg:
+                _, pcd, obj_id = labels_to_pcds[pcd_key].pop(0)
+                self.ranked_objs[obj_rank]['pcd'] = pcd
+                self.ranked_objs[obj_rank]['obj_id'] = obj_id
+                continue
+
+            #choose one that is unique
             new_pcds = []
-            for score, pcd in labels_to_pcds[pcd_key]:
+            for pcd_tup in labels_to_pcds[pcd_key]:
+                score, pcd, _ = pcd_tup
                 if assigned_centroids.any():
                     diff = assigned_centroids-np.average(pcd, axis=0)
                     centroid_dists = np.sqrt(np.sum(diff**2,axis=-1))
@@ -588,7 +595,8 @@ class Pipeline():
                 obj_inds = np.where(flat_seg == obj_id)                
                 obj_pts = pts_raw[obj_inds[0], :]
                 pc_obs_info['pcd_pts'][obj_id].append(util.crop_pcd(obj_pts))
-
+        
+        pcds_output = {}
         for obj_id, obj_pcd_pts in pc_obs_info['pcd_pts'].items():
             if not obj_pcd_pts:
                 log_warn('WARNING: COULD NOT FIND RELEVANT OBJ')
@@ -599,12 +607,18 @@ class Pipeline():
             inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
             target_obj_pcd_obs = target_obj_pcd_obs[inliers]
             self.obj_info[obj_id]['pcd'] = target_obj_pcd_obs
+            obj_class = self.obj_info[obj_id]['class']
+            if obj_class not in pcds_output:
+                pcds_output[obj_class] = []
+            pcds_output[obj_class].append((1.0, target_obj_pcd_obs, obj_id))
 
         with self.viz.recorder.meshcat_scene_lock:
             for obj_id, obj in self.obj_info.items():
                 label = 'scene/%s_pcd' % obj_id
                 color = [random.randint(0,255), random.randint(0,255), random.randint(0,255)]
                 util.meshcat_pcd_show(self.viz.mc_vis, obj['pcd'], color=color, name=label)
+        return pcds_output
+        
 
     def segment_scene(self, captions=None):
         '''
@@ -928,10 +942,13 @@ class Pipeline():
     def execute(self, obj_rank, ee_poses):
         obj_id = None
         if 'obj_id' in self.ranked_objs[obj_rank]:
-            obj_id = self.ranked_objs[obj_rank]['obj_rd']
+            obj_id = self.ranked_objs[obj_rank]['obj_id']
 
         if self.state == 2:
-            self.teleport(obj_id, ee_poses[0])
+            if obj_id:
+                self.teleport(obj_id, ee_poses[0])
+            else:
+                log_warn('Can not teleport an object without its sim ID')
         else:
             self.pre_execution(obj_id)
             jnt_poses = self.get_iks(ee_poses)
