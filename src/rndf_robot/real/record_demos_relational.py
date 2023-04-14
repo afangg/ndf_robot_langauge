@@ -1,7 +1,6 @@
-# import os
-# import sys
-# sys.path.append(osp.join(os.getenv('RNDF_SOURCE_DIR'), '..'))
 import os.path as osp
+import time
+import sys
 import signal
 import random
 import cv2
@@ -12,6 +11,7 @@ import copy
 import meshcat
 import trimesh
 import open3d
+
 import pyrealsense2 as rs
 
 from polymetis import GripperInterface, RobotInterface
@@ -22,6 +22,7 @@ from rndf_robot.utils import util, path_util
 from rndf_robot.utils.plotly_save import plot3d, plotly_scene_dict
 from rndf_robot.utils.visualize import PandaHand, Robotiq2F140Hand
 from rndf_robot.utils.record_demo_utils import DefaultQueryPoints, manually_segment_pcd
+from rndf_robot.utils.relational_utils import ParentChildObjectManager
 
 from rndf_robot.utils.franka_ik import FrankaIK #, PbPlUtils
 from rndf_robot.robot.simple_multicam import MultiRealsenseLocal
@@ -32,14 +33,63 @@ from rndf_robot.utils.real.plan_exec_util import PlanningHelper
 from rndf_robot.utils.real.perception_util import RealsenseInterface, enable_devices
 from rndf_robot.utils.real.polymetis_util import PolymetisHelper
 
-
 poly_util = PolymetisHelper()
 
 
-# def handle_thread(lc):
-#     while True:
-#         lc.handle_timeout(1)
-#         time.sleep(0.001)
+
+def gen_2f140_command(char, command):
+    """Update the command according to the character entered by the user."""
+
+    if char == 'a':
+        command = gripper_msg.Robotiq2FGripper_robot_output()
+        command.rACT = 1
+        command.rGTO = 1
+        command.rSP  = 255
+        command.rFR  = 150
+
+    if char == 'r':
+        command = gripper_msg.Robotiq2FGripper_robot_output()
+        command.rACT = 0
+
+    if char == 'c':
+        command.rPR = 255
+
+    if char == 'o':
+        command.rPR = 0
+
+    #If the command entered is a int, assign this value to rPRA
+    try:
+        command.rPR = int(char)
+        if command.rPR > 255:
+            command.rPR = 255
+        if command.rPR < 0:
+            command.rPR = 0
+    except ValueError:
+        pass
+
+    if char == 'f':
+        command.rSP += 25
+        if command.rSP > 255:
+            command.rSP = 255
+
+    if char == 'l':
+        command.rSP -= 25
+        if command.rSP < 0:
+            command.rSP = 0
+
+
+    if char == 'i':
+        command.rFR += 25
+        if command.rFR > 255:
+            command.rFR = 255
+
+    if char == 'd':
+        command.rFR -= 25
+        if command.rFR < 0:
+            command.rFR = 0
+
+    return command
+
 
 
 def main(args):
@@ -52,15 +102,26 @@ def main(args):
 
     cfg = util.AttrDict(dict())
 
-    demo_save_dir = osp.join(path_util.get_rndf_data(), args.demo_save_dir, args.object_class, args.exp)
+    multi_object_class = f'parent_{args.parent_class}_child_{args.child_class}'
+    parent_class = args.parent_class
+    child_class = args.child_class
+
+    demo_save_dir = osp.join(path_util.get_rndf_data(), args.demo_save_dir, 'multi_object', multi_object_class, args.exp)
     util.safe_makedirs(demo_save_dir)
 
-    pcd_save_dir = osp.join(path_util.get_rndf_data(), args.demo_save_dir, args.object_class, args.exp, 'pcd_observations')
+    # TODO: decide on a good default save location for the demo files
+    parent_save_dir = osp.join(path_util.get_rndf_data(), args.demo_save_dir, 'multi_object', parent_class, args.exp)
+    util.safe_makedirs(parent_save_dir)
+    child_save_dir = osp.join(path_util.get_rndf_data(), args.demo_save_dir, 'multi_object', child_class, args.exp)
+    util.safe_makedirs(child_save_dir)
+    single_save_dirs = dict(parent=parent_save_dir, child=child_save_dir)
+
+    pcd_save_dir = osp.join(path_util.get_rndf_data(), args.demo_save_dir, 'multi_object', multi_object_class, args.exp, 'pcd_observations')
     util.safe_makedirs(pcd_save_dir)
 
     #############################################################################
     # Panda, IK, trajectory helper, planning + execution helper
-
+    
     mc_vis = meshcat.Visualizer(zmq_url=f'tcp://127.0.0.1:{args.port_vis}')
     mc_vis['scene'].delete()
 
@@ -167,11 +228,8 @@ def main(args):
     # gripper_mesh_file_panda = osp.join(path_util.get_rndf_descriptions(), 'franka_panda/meshes/panda_hand_full.obj')
     gripper_mesh_file_2f140 = osp.join(path_util.get_rndf_descriptions(), 'franka_panda/meshes/robotiq_2f140/full_hand_2f140.obj')
     # gripper_mesh_file_2f140 = osp.join(path_util.get_rndf_descriptions(), 'franka_panda/meshes/robotiq_2f140/collision/robotiq_arg2f_base_link.obj')
-
     # rack_mesh_file = osp.join(path_util.get_rndf_descriptions(), cfg.PLACEMENT_OBJECTS.RACK_MESH_FILE)
     # shelf_mesh_file = osp.join(path_util.get_rndf_descriptions(), cfg.PLACEMENT_OBJECTS.SHELF_MESH_FILE)
-    # rack_mesh_file = osp.join(path_util.get_rndf_descriptions(), 'hanging/rack.obj') 
-    # shelf_mesh_file = osp.join(path_util.get_rndf_descriptions(), 'hanging/shelf.obj')
 
     external_object_meshes = {
         'gripper_panda': gripper_mesh_file_panda,
@@ -234,10 +292,7 @@ def main(args):
         pose_frame_source=util.list2pose_stamped(current_grasp_pose)
     ))
     current_g2p_transform_mat = util.matrix_from_pose(util.list2pose_stamped(current_g2p_transform_list))
-    # home_joints = panda.home_pose.numpy().tolist()
     home_joints = np.array([-0.1329, -0.0262, -0.0448, -1.60,  0.0632,  1.9965, -0.8882]).tolist()
-
-    # home_joints = cfg.OUT_OF_FRAME_JOINTS
     # home_joints = cfg.HOME_JOINTS
     current_panda_plan = []
 
@@ -257,17 +312,18 @@ def main(args):
     cam_poses_list = None
 
     # constants for manually cropping the point cloud (simple way to segment the object)
-    # cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.5], [0.0075, 0.4], 'table'
-    # cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.5], [0.015, 0.4], 'table'
-    # cropx, cropy, cropz, crop_note = [0.3, 0.6], [0.3, 0.6], [0.01, 0.35], 'table'
-
-    cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.0], [0.01, 0.35], 'table_right'
-    # cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.0], [0.09, 0.35], 'block2'
-    # cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.0], [0.09, 0.35], 'block'
+    # cropx, cropy, cropz, crop_note = [0.375, 0.75], [-0.5, 0.5], [0.0075, 0.35], 'table'
+    cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.5], [0.008, 0.4], 'table'
     full_cropx, full_cropy, full_cropz, full_crop_note = [0.0, 0.8], [-0.65, 0.65], [-0.01, 1.0], 'full scene'
 
     print('\n\nBeginning demo iteration %d\n\n' % demo_iteration)
     got_observation = False
+    default_2f140_open_width = 0
+    offset_pose_set = None
+    offset_pose_relative = [0, 0, 0, 0, 0, 0, 1]
+    interaction_point = None
+
+    parent_child_manager = ParentChildObjectManager(mc_vis, parent_class_name=parent_class, child_class_name=child_class, panda_hand_cls=PandaHand) 
 
     while True:
         current_g2p_transform_list = util.pose_stamped2list(util.get_transform(
@@ -275,6 +331,13 @@ def main(args):
             pose_frame_source=util.list2pose_stamped(current_grasp_pose)
         ))
         current_g2p_transform_mat = util.matrix_from_pose(util.list2pose_stamped(current_g2p_transform_list))
+
+        # if offset_pose_set is not None:
+        #     offset_pose_relative = util.pose_stamped2list(util.get_transform(
+        #         pose_frame_target=util.list2pose_stamped(offset_pose_set), 
+        #         pose_frame_source=util.list2pose_stamped(current_place_pose)
+        #     ))
+        #     util.meshcat_frame_show(mc_vis, 'scene/current_offset_pose', util.matrix_from_pose(util.list2pose_stamped(offset_pose_set)))
 
         grasp_pose_viz.reset_pose()
         place_pose_viz.reset_pose()
@@ -305,6 +368,7 @@ def main(args):
         if proc_pcd_place is not None:
             util.meshcat_pcd_show(mc_vis, proc_pcd_place, color=[255, 0, 255], name='scene/placed_object_pcd')
 
+        parent_child_manager.visualize_current_state()
         user_val = input(
             '''
             Press:
@@ -315,6 +379,7 @@ def main(args):
                 [f] to open (if we have the gripper)
                 [g] to record grasp pose
                 [p] to record place pose
+                [ff] to record offset from place pose
                 [h] to go home
                 [e] to execute currently stored plan
                 [s] to save the currently stored grasps
@@ -333,13 +398,9 @@ def main(args):
             rgb_imgs = []
             depth_imgs = []
             for idx, cam in enumerate(cams.cams):
-                # rgb, depth = img_subscribers[idx][1].get_rgb_and_depth(block=True)
                 rgb, depth = realsense_interface.get_rgb_and_depth_image(pipelines[idx])
                 rgb_imgs.append(rgb)
-
-                # cam_intrinsics = img_subscribers[idx][2].get_cam_intrinsics(block=True)
                 cam_intrinsics = realsense_interface.get_intrinsics_mat(pipelines[idx])
-
                 cam.cam_int_mat = cam_intrinsics
                 cam._init_pers_mat()
                 cam_pose_world = cam.cam_ext_mat
@@ -379,8 +440,9 @@ def main(args):
             pcd_o3d = open3d.geometry.PointCloud()
             pcd_o3d.points = open3d.utility.Vector3dVector(proc_pcd)
             # labels = np.array(pcd_o3d.cluster_dbscan(eps=0.005, min_points=50, print_progress=True))
+            # labels = np.array(pcd_o3d.cluster_dbscan(eps=0.008, min_points=20, print_progress=True))
             labels = np.array(pcd_o3d.cluster_dbscan(eps=0.005, min_points=30, print_progress=True))
-            
+
             clusters_detected = np.unique(labels)
             pcd_clusters = []
             cluster_sizes = []
@@ -390,14 +452,47 @@ def main(args):
                 pcd_clusters.append(cluster)
                 sz = cluster.shape[0]
                 cluster_sizes.append(sz)
-            top2sz = np.argmax(cluster_sizes)
+            top2sz = np.argsort(cluster_sizes)[-2:]
 
-            top2clusters = pcd_clusters[top2sz]
+            top2clusters = np.concatenate([pcd_clusters[top2sz[0]], pcd_clusters[top2sz[1]]], axis=0)
             # util.meshcat_multiple_pcd_show(mc_vis, pcd_clusters)
             util.meshcat_pcd_show(mc_vis, top2clusters, name='scene/top2clusters')
             proc_pcd = copy.deepcopy(top2clusters)
 
+            if args.instance_seg_method == 'hand-label':
+                log_warn('NOT IMPLEMENTED!')
+            elif args.instance_seg_method == 'nn':
+                log_warn('NOT IMPLEMENTED!')
+            else:  # y-axis
+                # get all clusters that are on the positive and negative side of the y-axis
+                pos_y_proc_pcd = proc_pcd[np.where(proc_pcd[:, 1] > 0.0)[0]]
+                neg_y_proc_pcd = proc_pcd[np.where(proc_pcd[:, 1] < 0.0)[0]]
+
+                # crop each of these point clouds to get the single objects
+                log_info('Segmenting the positive y-axis pcd to PARENT and negative y-axis pcd to CHILD')
+                parent_child_manager.set_parent_pointcloud(pos_y_proc_pcd)
+                parent_child_manager.set_child_pointcloud(neg_y_proc_pcd)
+
+            log_info('Setting the active object to be the PARENT')
+            parent_child_manager.set_active_object('parent')
+
             got_observation = True
+            continue
+        elif user_val == 'sa':
+            # set the active object
+            active_object = input('Please enter either "parent" or "child" ("p" or "c")')
+            if active_object == 'p':
+                active_object = 'parent'
+            elif active_object == 'c':
+                active_object = 'child'
+            
+            log_info(f'Setting the active object to: {active_object}')
+            parent_child_manager.set_active_object(active_object)
+            continue
+        elif user_val == 'fa':
+            # FLIP the active object
+            parent_child_manager.flip_active_object()
+            log_info(f'FLIPPING the active object to: {parent_child_manager.get_active_object()}')
             continue
         elif user_val == 'em':
             print('\n\nHere in interactive mode\n\n')
@@ -412,8 +507,9 @@ def main(args):
             if not got_observation:
                 print('\n\nCannot save until we get an observation!\n\n')
                 continue
-            save_file_path = osp.join(demo_save_dir, args.exp + '_' + save_file_suffix)
-            print('\n\nSaving data to path: %s\n\n' % save_file_path)
+            single_demo_save_dir = single_save_dirs[parent_child_manager.get_active_object()]
+            save_file_path = osp.join(single_demo_save_dir, args.exp + '_' + save_file_suffix)
+            print(f'\n\n[Active object: {parent_child_manager.get_active_object()}] Saving data to path: %s\n\n' % save_file_path)
             np.savez(
                 save_file_path,
                 pcd_pts=pcd_pts,
@@ -528,16 +624,99 @@ def main(args):
             got_observation = False
             print('\n\nBeginning demo iteration %d\n\n' % demo_iteration)
             continue
+        elif user_val == 'sm':
+            # Save Multi
+            log_info('Saving current info for multi object point clouds')
 
+            if not got_observation:
+                print('\n\nCannot save until we get an observation!\n\n')
+                continue
+
+            save_file_path = osp.join(demo_save_dir, args.exp + '_' + save_file_suffix)
+            print('\n\nSaving data to path: %s\n\n' % save_file_path)
+
+            multi_obj_start_pcd_dict = dict(
+                parent=parent_child_manager.get_parent_pointcloud(),
+                child=parent_child_manager.get_child_pointcloud())
+
+            multi_obj_final_pcd_dict = dict(
+                parent=parent_child_manager.get_parent_tf_pointcloud(),
+                child=parent_child_manager.get_child_tf_pointcloud())
+            
+            multi_obj_grasp_pose_dict = dict(
+                parent=parent_child_manager.get_parent_grasp_pose(),
+                child=parent_child_manager.get_child_grasp_pose())
+
+            multi_obj_place_pose_dict = dict(
+                parent=parent_child_manager.get_parent_place_pose(),
+                child=parent_child_manager.get_child_place_pose())
+
+            multi_obj_grasp_joints_dict = dict(
+                parent=parent_child_manager.get_parent_grasp_joints(),
+                child=parent_child_manager.get_child_grasp_joints())
+
+            multi_obj_place_joints_dict = dict(
+                parent=parent_child_manager.get_parent_place_joints(),
+                child=parent_child_manager.get_child_place_joints())
+            
+            multi_obj_names_dict = dict(
+                parent=parent_class,
+                child=child_class)
+
+            np.savez(
+                save_file_path,
+                pcd_pts=pcd_pts,
+                processed_pcd=proc_pcd,
+                rgb_imgs=rgb_imgs,
+                depth_imgs=depth_imgs,
+                cam_intrinsics=cam_int_list,
+                cam_poses=cam_poses_list,
+                multi_obj_names=multi_obj_names_dict,
+                multi_obj_start_pcd=multi_obj_start_pcd_dict,
+                multi_obj_final_pcd=multi_obj_final_pcd_dict,
+                grasp_pose_world=multi_obj_grasp_pose_dict,
+                place_pose_world=multi_obj_place_pose_dict,
+                grasp_joints=multi_obj_grasp_joints_dict,
+                place_joints=multi_obj_place_joints_dict,
+                ee_link=cfg.DEFAULT_EE_FRAME,
+                gripper_type=args.gripper_type,
+                offset_pose_relative=offset_pose_relative,
+                interaction_point=interaction_point
+            )
+
+            img_dir = osp.join(demo_save_dir, args.exp + '_' + save_file_suffix.split('.npz')[0], 'imgs')
+            depth_dir = osp.join(demo_save_dir, args.exp + '_' + save_file_suffix.split('.npz')[0], 'depth_imgs')
+            pcd_dir = osp.join(demo_save_dir, args.exp + '_' + save_file_suffix.split('.npz')[0], 'pcds')
+            util.safe_makedirs(img_dir)
+            util.safe_makedirs(depth_dir)
+            util.safe_makedirs(pcd_dir)
+
+            plot3d(
+                [parent_child_manager.get_parent_pointcloud(), parent_child_manager.get_child_pointcloud()], ['red', 'blue'],
+                fname=osp.join(pcd_save_dir, 'pc_pcd.html'),
+                auto_scene=False,
+                scene_dict=plotly_scene_dict,
+                z_plane=False)
+            for i in range(len(rgb_imgs)):
+                # np2img(rgb_imgs[i], osp.join(img_dir, '%d.png' % i))
+                # np2img(depth_imgs[i].astype(np.uint16), osp.join(depth_dir, '%d.png' % i))
+                cv2.imwrite(osp.join(img_dir, '%d.png' % i), cv2.cvtColor(rgb_imgs[i], cv2.COLOR_RGB2BGR))
+                cv2.imwrite(osp.join(depth_dir, '%d.png' % i), depth_imgs[i].astype(np.uint16))
+            save_file_suffix = save_file_suffix.replace('%d.npz' % demo_iteration, '%d.npz' % (demo_iteration + 1))
+            demo_iteration += 1
+            # sp.call('./sync_demo_files.sh run', shell=True)
+            # sp.call(['./sync_demo_files.sh', 'run'])
+            got_observation = False
+            print('\n\nBeginning demo iteration %d\n\n' % demo_iteration)
+
+            continue    
         elif user_val == 'i':
             print('\n\nSetting low stiffness in current pose, you can now move the robot')
-            # panda.set_cart_impedance_pose(panda.endpoint_pose(), stiffness=[0]*6)
             panda.start_cartesian_impedance(Kx=torch.zeros(6), Kxd=torch.zeros(6))
             continue
         elif user_val == 'l':
             print('\n\nSetting joint positions to current value\n\n')
             panda.start_joint_impedance()
-            # panda.start_joint_impedance(Kq=Kq_new, Kqd=Kqd_new)
             continue
         elif user_val == 'r':
             print('\n\nExecuting grasp\n\n')
@@ -552,6 +731,9 @@ def main(args):
             current_grasp_joints = panda.get_joint_positions().numpy().tolist()
             print('\n\nRecording grasp pose!\n\n')
             print(current_grasp_pose)
+
+            parent_child_manager.set_grasp_pose(util.matrix_from_pose(util.list2pose_stamped(current_grasp_pose)))
+            log_info(f'Setting current pose as grasp for {parent_child_manager.get_active_object()} object')
             continue
         elif user_val == 'p':
             current_place_pose = poly_util.polypose2np(panda.get_ee_pose())
@@ -565,8 +747,18 @@ def main(args):
             ))
             current_g2p_transform_mat = util.matrix_from_pose(util.list2pose_stamped(current_g2p_transform_list))
 
-            if proc_pcd is not None:
-                proc_pcd_place = util.transform_pcd(proc_pcd, current_g2p_transform_mat)
+            parent_child_manager.set_place_pose(util.matrix_from_pose(util.list2pose_stamped(current_place_pose)))
+            parent_child_manager.apply_transform_to_current(util.matrix_from_pose(util.list2pose_stamped(current_g2p_transform_list)))
+            log_info(f'Setting current pose as place for {parent_child_manager.get_active_object()} object')
+            continue
+        elif user_val == 'ff':
+            offset_pose_set = poly_util.polypose2np(panda.get_ee_pose())
+            print('\n\nRecording offset pose!\n\n')
+            print(offset_pose_set)
+            offset_pose_relative = util.pose_stamped2list(util.get_transform(
+                pose_frame_target=util.list2pose_stamped(offset_pose_set), 
+                pose_frame_source=util.list2pose_stamped(current_place_pose)
+            ))
             continue
         elif user_val == 'q':
             # this is the pose of the wrist (panda_link8)
@@ -594,6 +786,9 @@ def main(args):
                 custom_query_points=custom_query_points,
                 ee_query_pose_world=current_ee_query_pose)
             print('\n\nNew custom query points configuration recorded\n\n')
+
+            interaction_point = np.asarray(current_ee_query_pose[:3])
+            print('\n\nNew position of the interaction point recorded\n\n')
             continue
         elif user_val == 'h':
             # panda.move_to_joint_positions(home_joints)
@@ -616,7 +811,6 @@ def main(args):
             if args.gripper_type != '2f140':
                 print('Only valid for 2F140 gripper')
                 continue
-            # default_2f140_open_width = int(np.clip(int(new_gripper_open_value), 0, 255))
             default_2f140_open_width = int(np.clip(int(new_gripper_open_value), 0, gripper.get_state().max_width))
             planning.set_gripper_open_pos(default_2f140_open_width)
             planning.gripper.goto(planning.gripper_close_pos, gripper_speed, gripper_force, blocking=False)
@@ -628,7 +822,6 @@ def main(args):
 
             current_grasp_pose = current_place_pose = poly_util.polypose2np(panda.get_ee_pose())
             # current_grasp_pose = current_place_pose = [0, 0, 0, 0, 0, 0, 1]
-            # current_grasp_joints = current_place_joints = panda.joint_angles()
             current_grasp_joints = current_place_joints = panda.get_joint_positions().numpy().tolist()
             current_g2p_transform_list = util.pose_stamped2list(util.get_transform(
                 pose_frame_target=util.list2pose_stamped(current_place_pose),
@@ -644,6 +837,10 @@ def main(args):
             cam_int_list = None
             cam_poses_list = None
 
+            interaction_point = None
+            offset_pose_relative = [0, 0, 0, 0, 0, 0, 1]
+
+            parent_child_manager.clear()
             print('Clearing all info')
             mc_vis['scene'].delete()
             continue
@@ -657,11 +854,13 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('-p', '--port_vis', type=int, default=6000)
     parser.add_argument('--exp', type=str, default='debug_real_demo')
-    parser.add_argument('--object_class', type=str, default='mug')
+    parser.add_argument('-p', '--port_vis', type=int, default=6000)
+    parser.add_argument('--parent_class', type=str, required=True, help='Class name of parent object')
+    parser.add_argument('--child_class', type=str, required=True, help='Class name of child object')
+    parser.add_argument('--instance_seg_method', type=str, default='y-axis', help='Options: ["y-axis", "hand-label"]')
+    parser.add_argument('--demo_save_dir', type=str, default='real_demo_data_multi_object')
     parser.add_argument('--config', type=str, default='base_demo_cfg.yaml')
-    parser.add_argument('--demo_save_dir', type=str, default='real_demo_data')
     parser.add_argument('--n_cams', type=int, default=4)
     parser.add_argument('--start_iteration', type=int, default=0)
     parser.add_argument('--seed', type=int, default=0)
