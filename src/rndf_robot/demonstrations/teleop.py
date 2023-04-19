@@ -12,12 +12,12 @@ import pybullet as p
 from airobot import Robot
 from airobot.utils.common import euler2quat
 
-from ndf_robot.utils import util, path_util
-from ndf_robot.utils.eval_gen_utils import safeCollisionFilterPair
-from ndf_robot.robot.multicam import MultiCams
+from rndf_robot.utils import util, path_util
+from rndf_robot.utils.eval_gen_utils import safeCollisionFilterPair
+from rndf_robot.robot.multicam import MultiCams
 
-from ndf_robot.config.default_eval_cfg import get_eval_cfg_defaults
-from ndf_robot.config.default_obj_cfg import get_obj_cfg_defaults
+from rndf_robot.config.default_eval_cfg import get_eval_cfg_defaults
+from rndf_robot.config.default_obj_cfg import get_obj_cfg_defaults
 
 
 def hide_link(obj_id, link_id): 
@@ -83,7 +83,7 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
 
             # general experiment + environment setup/scene generation configs
             cfg = get_eval_cfg_defaults()
-            config_fname = osp.join(path_util.get_ndf_config(), 'eval_cfgs', global_dict['config'] + '.yaml')
+            config_fname = osp.join(path_util.get_rndf_config(), 'eval_cfgs', global_dict['config'] + '.yaml')
             if osp.exists(config_fname):
                 cfg.merge_from_file(config_fname)
             else:
@@ -92,7 +92,7 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
 
             # object specific configs
             obj_cfg = get_obj_cfg_defaults()
-            obj_config_name = osp.join(path_util.get_ndf_config(), '%s_obj_cfg.yaml' % obj_class)
+            obj_config_name = osp.join(path_util.get_rndf_config(), '%s_obj_cfg.yaml' % obj_class)
             obj_cfg.merge_from_file(obj_config_name)
             obj_cfg.freeze()
 
@@ -109,7 +109,7 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
             angle_N = 10
 
             # set up possible gripper query points that are used in optimization
-            gripper_mesh_file = osp.join(path_util.get_ndf_descriptions(), 'franka_panda/meshes/collision/hand.obj')
+            gripper_mesh_file = osp.join(path_util.get_rndf_descriptions(), 'franka_panda/meshes/collision/hand.obj')
             gripper_mesh = trimesh.load_mesh(gripper_mesh_file)
             gripper_pts = gripper_mesh.sample(500)
             gripper_pts_gaussian = np.random.normal(size=(500,3))
@@ -118,7 +118,7 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
             gripper_pts_uniform = gripper_pts_bb.sample_volume(500)
 
             # set up possible rack query points that are used in optimization
-            rack_mesh_file = osp.join(path_util.get_ndf_descriptions(), 'hanging/table/simple_rack.obj')
+            rack_mesh_file = osp.join(path_util.get_rndf_descriptions(), 'hanging/table/simple_rack.obj')
             rack_mesh = trimesh.load_mesh(rack_mesh_file)
             rack_pts_gt = rack_mesh.sample(500)
             rack_pts_gaussian = np.random.normal(size=(500,3))
@@ -127,7 +127,7 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
             rack_pts_uniform = rack_pts_bb.sample_volume(500)
 
             # set up possible shelf query points that are used in optimization
-            shelf_mesh_file = osp.join(path_util.get_ndf_descriptions(), 'hanging/table/shelf_back.stl')
+            shelf_mesh_file = osp.join(path_util.get_rndf_descriptions(), 'hanging/table/shelf_back.stl')
             shelf_mesh = trimesh.load_mesh(shelf_mesh_file)
             shelf_pts_gt = shelf_mesh.sample(500)
             shelf_mesh_bb = shelf_mesh.bounding_box_oriented
@@ -140,13 +140,13 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
                 table_urdf_file = 'table_rack.urdf'
             else:
                 table_urdf_file = 'table_shelf.urdf'
-            table_urdf = open(osp.join(path_util.get_ndf_descriptions(), 'hanging/table/%s' % table_urdf_file), 'r').read()
+            table_urdf = open(osp.join(path_util.get_rndf_descriptions(), 'hanging/table/%s' % table_urdf_file), 'r').read()
 
             table_ori = euler2quat([0, 0, np.pi / 2])
-            table_id = robot.pb_client.load_urdf(osp.join(path_util.get_ndf_descriptions(), 'hanging/table', table_urdf_file),
+            table_id = robot.pb_client.load_urdf(osp.join(path_util.get_rndf_descriptions(), 'hanging/table', table_urdf_file),
                                     cfg.TABLE_POS, 
                                     table_ori,
-                                    scaling=cfg.TABLE_SCALING)
+                                    scaling=1.0)
 
             z = 0.06; y = np.abs(z*np.tan(np.deg2rad(40)))
             on_rack_offset = np.array([0, y, -z])
@@ -285,10 +285,10 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
 
             # put table at right spot
             table_ori = euler2quat([0, 0, np.pi / 2])
-            table_id = robot.pb_client.load_urdf(osp.join(path_util.get_ndf_descriptions(), 'hanging/table', table_urdf_file),
+            table_id = robot.pb_client.load_urdf(osp.join(path_util.get_rndf_descriptions(), 'hanging/table', table_urdf_file),
                                     cfg.TABLE_POS,
                                     table_ori,
-                                    scaling=cfg.TABLE_SCALING)
+                                    scaling=1.0)
 
             shapenet_id = global_dict['shapenet_id']
             print('\n\nUsing shapenet id: %s\n\n' % shapenet_id)

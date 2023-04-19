@@ -1,5 +1,7 @@
 import copy
 
+from airobot import log_info, log_warn, log_debug, log_critical, set_log_level
+
 from rndf_robot.utils import util, trimesh_util
 
 
@@ -7,7 +9,7 @@ class ParentChildObjectManager:
     def __init__(self, mc_vis, parent_class_name, child_class_name, panda_hand_cls):
         self.mc_vis = mc_vis
         self.panda_hand_cls = panda_hand_cls  # either PandaHand or Robotiq2F140Hand, to be instantiated
-        self._active_object = 'parent'
+        self._active_object = 'child'
         self.clear()
 
     def clear(self):

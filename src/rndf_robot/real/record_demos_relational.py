@@ -21,7 +21,7 @@ from airobot import log_info, log_warn, log_debug, log_critical, set_log_level
 from rndf_robot.utils import util, path_util
 from rndf_robot.utils.plotly_save import plot3d, plotly_scene_dict
 from rndf_robot.utils.visualize import PandaHand, Robotiq2F140Hand
-from rndf_robot.utils.record_demo_utils import DefaultQueryPoints, manually_segment_pcd
+from rndf_robot.utils.record_demo_utils import DefaultQueryPoints, manually_segment_pcd, convert_wrist2tip
 from rndf_robot.utils.relational_utils import ParentChildObjectManager
 
 from rndf_robot.utils.franka_ik import FrankaIK #, PbPlUtils
@@ -34,63 +34,6 @@ from rndf_robot.utils.real.perception_util import RealsenseInterface, enable_dev
 from rndf_robot.utils.real.polymetis_util import PolymetisHelper
 
 poly_util = PolymetisHelper()
-
-
-
-def gen_2f140_command(char, command):
-    """Update the command according to the character entered by the user."""
-
-    if char == 'a':
-        command = gripper_msg.Robotiq2FGripper_robot_output()
-        command.rACT = 1
-        command.rGTO = 1
-        command.rSP  = 255
-        command.rFR  = 150
-
-    if char == 'r':
-        command = gripper_msg.Robotiq2FGripper_robot_output()
-        command.rACT = 0
-
-    if char == 'c':
-        command.rPR = 255
-
-    if char == 'o':
-        command.rPR = 0
-
-    #If the command entered is a int, assign this value to rPRA
-    try:
-        command.rPR = int(char)
-        if command.rPR > 255:
-            command.rPR = 255
-        if command.rPR < 0:
-            command.rPR = 0
-    except ValueError:
-        pass
-
-    if char == 'f':
-        command.rSP += 25
-        if command.rSP > 255:
-            command.rSP = 255
-
-    if char == 'l':
-        command.rSP -= 25
-        if command.rSP < 0:
-            command.rSP = 0
-
-
-    if char == 'i':
-        command.rFR += 25
-        if command.rFR > 255:
-            command.rFR = 255
-
-    if char == 'd':
-        command.rFR -= 25
-        if command.rFR < 0:
-            command.rFR = 0
-
-    return command
-
-
 
 def main(args):
     #############################################################################
@@ -183,9 +126,13 @@ def main(args):
     if args.gripper_type == '2f140':
         grasp_pose_viz = Robotiq2F140Hand(grasp_frame=False)
         place_pose_viz = Robotiq2F140Hand(grasp_frame=False)
+        wrist2tip_tf = [0, 0, 0.24, 0, 0, 0, 1.0]
+        tip2wrist_tf = [0, 0, -0.24, 0, 0, 0, 1.0]
     else:
         grasp_pose_viz = PandaHand(grasp_frame=True)
         place_pose_viz = PandaHand(grasp_frame=True)
+        wrist2tip_tf = [0, 0, 0.1034, 0, 0, -0.3827, 0.9239]
+        tip2wrist_tf = [0, 0, -0.1034, 0, 0, 0.3827, 0.9239]
     grasp_pose_viz.reset_pose()
     place_pose_viz.reset_pose()
     grasp_pose_viz.meshcat_show(mc_vis, name_prefix='grasp_pose')
@@ -313,7 +260,7 @@ def main(args):
 
     # constants for manually cropping the point cloud (simple way to segment the object)
     # cropx, cropy, cropz, crop_note = [0.375, 0.75], [-0.5, 0.5], [0.0075, 0.35], 'table'
-    cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.5], [0.008, 0.4], 'table'
+    cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.4, 0.5], [0.01, 0.4], 'table'
     full_cropx, full_cropy, full_cropz, full_crop_note = [0.0, 0.8], [-0.65, 0.65], [-0.01, 1.0], 'full scene'
 
     print('\n\nBeginning demo iteration %d\n\n' % demo_iteration)
@@ -323,7 +270,12 @@ def main(args):
     offset_pose_relative = [0, 0, 0, 0, 0, 0, 1]
     interaction_point = None
 
-    parent_child_manager = ParentChildObjectManager(mc_vis, parent_class_name=parent_class, child_class_name=child_class, panda_hand_cls=PandaHand) 
+    pc_hand_viz_cls = PandaHand if args.gripper_type == 'panda' else Robotiq2F140Hand
+    parent_child_manager = ParentChildObjectManager(
+        mc_vis, 
+        parent_class_name=parent_class, 
+        child_class_name=child_class, 
+        panda_hand_cls=pc_hand_viz_cls) 
 
     while True:
         current_g2p_transform_list = util.pose_stamped2list(util.get_transform(
@@ -437,27 +389,28 @@ def main(args):
             # crop the point cloud to the table
             proc_pcd = manually_segment_pcd(full_pcd, x=cropx, y=cropy, z=cropz, note=crop_note)
 
-            pcd_o3d = open3d.geometry.PointCloud()
-            pcd_o3d.points = open3d.utility.Vector3dVector(proc_pcd)
-            # labels = np.array(pcd_o3d.cluster_dbscan(eps=0.005, min_points=50, print_progress=True))
-            # labels = np.array(pcd_o3d.cluster_dbscan(eps=0.008, min_points=20, print_progress=True))
-            labels = np.array(pcd_o3d.cluster_dbscan(eps=0.005, min_points=30, print_progress=True))
+            # pcd_o3d = open3d.geometry.PointCloud()
+            # pcd_o3d.points = open3d.utility.Vector3dVector(proc_pcd)
+            # # labels = np.array(pcd_o3d.cluster_dbscan(eps=0.005, min_points=50, print_progress=True))
+            # # labels = np.array(pcd_o3d.cluster_dbscan(eps=0.008, min_points=20, print_progress=True))
+            # labels = np.array(pcd_o3d.cluster_dbscan(eps=0.003, min_points=30, print_progress=True))
 
-            clusters_detected = np.unique(labels)
-            pcd_clusters = []
-            cluster_sizes = []
-            for seg_idx in clusters_detected:
-                seg_inds = np.where(labels == seg_idx)[0]
-                cluster = proc_pcd[seg_inds]
-                pcd_clusters.append(cluster)
-                sz = cluster.shape[0]
-                cluster_sizes.append(sz)
-            top2sz = np.argsort(cluster_sizes)[-2:]
+            # clusters_detected = np.unique(labels)
+            # pcd_clusters = []
+            # cluster_sizes = []
+            # for seg_idx in clusters_detected:
+            #     seg_inds = np.where(labels == seg_idx)[0]
+            #     cluster = proc_pcd[seg_inds]
+            #     pcd_clusters.append(cluster)
+            #     sz = cluster.shape[0]
+            #     cluster_sizes.append(sz)
+            # top2sz = np.argsort(cluster_sizes)[-2:]
 
-            top2clusters = np.concatenate([pcd_clusters[top2sz[0]], pcd_clusters[top2sz[1]]], axis=0)
-            # util.meshcat_multiple_pcd_show(mc_vis, pcd_clusters)
-            util.meshcat_pcd_show(mc_vis, top2clusters, name='scene/top2clusters')
-            proc_pcd = copy.deepcopy(top2clusters)
+            # top2clusters = np.concatenate([pcd_clusters[top2sz[0]], pcd_clusters[top2sz[1]]], axis=0)
+            # # util.meshcat_multiple_pcd_show(mc_vis, pcd_clusters)
+            # util.meshcat_pcd_show(mc_vis, top2clusters, name='scene/top2clusters')
+
+            # proc_pcd = copy.deepcopy(top2clusters)
 
             if args.instance_seg_method == 'hand-label':
                 log_warn('NOT IMPLEMENTED!')
@@ -473,8 +426,8 @@ def main(args):
                 parent_child_manager.set_parent_pointcloud(pos_y_proc_pcd)
                 parent_child_manager.set_child_pointcloud(neg_y_proc_pcd)
 
-            log_info('Setting the active object to be the PARENT')
-            parent_child_manager.set_active_object('parent')
+            log_info('Setting the active object to be the CHILD')
+            parent_child_manager.set_active_object('child')
 
             got_observation = True
             continue
@@ -678,7 +631,7 @@ def main(args):
                 place_pose_world=multi_obj_place_pose_dict,
                 grasp_joints=multi_obj_grasp_joints_dict,
                 place_joints=multi_obj_place_joints_dict,
-                ee_link=cfg.DEFAULT_EE_FRAME,
+                ee_link=None,
                 gripper_type=args.gripper_type,
                 offset_pose_relative=offset_pose_relative,
                 interaction_point=interaction_point
@@ -766,8 +719,8 @@ def main(args):
             util.meshcat_frame_show(mc_vis, 'scene/custom_query_points_pose', util.matrix_from_pose(util.list2pose_stamped(current_ee_query_pose)))
 
             # this is the pose of the point in between the fingertips
-            # current_ee_query_pose = convert_wrist2tip(current_ee_query_pose, wrist2tip_tf=wrist2tip_tf) 
-            # util.meshcat_frame_show(mc_vis, 'scene/custom_query_points_pose_tip', util.matrix_from_pose(util.list2pose_stamped(current_ee_query_pose)))
+            current_ee_query_pose = convert_wrist2tip(current_ee_query_pose, wrist2tip_tf=wrist2tip_tf) 
+            util.meshcat_frame_show(mc_vis, 'scene/custom_query_points_pose_tip', util.matrix_from_pose(util.list2pose_stamped(current_ee_query_pose)))
 
             custom_query_points = copy.deepcopy(query_point_info.default_origin_pts)
             custom_query_points = util.transform_pcd(custom_query_points, util.matrix_from_pose(util.list2pose_stamped(current_ee_query_pose)))

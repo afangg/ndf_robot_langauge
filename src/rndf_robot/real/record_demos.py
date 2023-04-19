@@ -35,13 +35,6 @@ from rndf_robot.utils.real.polymetis_util import PolymetisHelper
 
 poly_util = PolymetisHelper()
 
-
-# def handle_thread(lc):
-#     while True:
-#         lc.handle_timeout(1)
-#         time.sleep(0.001)
-
-
 def main(args):
     #############################################################################
     # generic setup

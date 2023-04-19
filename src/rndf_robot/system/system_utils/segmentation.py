@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 import open3d as o3d
+import copy
 
 from PIL import Image
 import PIL.ImageDraw as ImageDraw
@@ -114,7 +115,7 @@ def draw_bounding_box_on_image(image,
     text_bottom -= text_height - 2 * margin
 
 
-def owlvit_detect(image, descriptions, score_threshold=0.05, show_seg=False):
+def owlvit_detect(image, descriptions, top=None, score_threshold=0.05, show_seg=False):
     '''
     Detects objects in image that corresponding to a given description and returns the bounding boxes
     of the parts of the image that match above a certain threshold
@@ -185,6 +186,7 @@ def owlvit_detect(image, descriptions, score_threshold=0.05, show_seg=False):
         #             not_contained = True
         #             break
         #     if not_contained: continue
+    print(bounding_boxes)
 
     if show_seg:
         for label in bounding_boxes:
@@ -202,10 +204,20 @@ def owlvit_detect(image, descriptions, score_threshold=0.05, show_seg=False):
         plt.imshow(pil_image)
         plt.show()
 
-    label_count = {label: len(bounding_boxes[label]) for label in bounding_boxes}
-    return bounding_boxes, highest_scores
+    out = {}
+    for label, bbs in bounding_boxes.items():
+        bbs_and_score = [(bbs[i], highest_scores[label][i]) for i in range(len(bbs))]
+        sorted_bbs = sorted(bbs_and_score, key=lambda x: x[1], reverse=True)
+        max_count = top if top is not None else len(sorted_bbs)
+        out[label] = sorted_bbs[:max_count]
+    out_boxes = {}
+    out_scores = {}
+    for label, bb_and_scores in out.items():
+        out_boxes[label] = [bb_and_scores[i][0] for i in range(len(bb_and_scores))] 
+        out_scores[label] = [bb_and_scores[i][1] for i in range(len(bb_and_scores))] 
+    return out_boxes, out_scores
 
-def bb_contained(bb1, bb2, margin=0.01):
+def bb_contained(bb1, bb2, margin=1):
     '''
     bb1: (xmin,ymin,xmax,ymax)
     bb2: (xmin,ymin,xmax,ymax)
@@ -220,59 +232,49 @@ def bb_contained(bb1, bb2, margin=0.01):
             return i
         bb1, bb2 = bb2, bb1
     return None
+
+def get_bb_center(bb):
+    xmin1,ymin1,xmax1,ymax1 = bb
+    return (xmin1+xmax1)/2, (ymin1+ymax1)/2
    
-def detect_bbs(image, classes):
-    ids_to_bb, cam_scores = owlvit_detect(image, classes, score_threshold=0.2, show_seg=False)
+def detect_bbs(image, classes, max_count=None, score_threshold=0.1):
+    captions_to_bbs, cam_scores = owlvit_detect(image, 
+                                          classes, 
+                                          top=max_count, 
+                                          score_threshold=score_threshold, 
+                                          show_seg=True)
     obj_to_region = {}
-    for obj_id, boxes in ids_to_bb.items():
-        obj_to_region[obj_id] = [(list(int(i) for i in box)) for box in boxes]
+    for caption, boxes in captions_to_bbs.items():
+        obj_to_region[caption] = [(list(int(i) for i in box)) for box in boxes]
     return obj_to_region, cam_scores
 
 def get_largest_pcd(pcd, show_scene=False):
     region_pcd = o3d.geometry.PointCloud()
     region_pcd.points = o3d.utility.Vector3dVector(pcd)
-    labels = np.array(region_pcd.cluster_dbscan(eps=0.015, min_points=10))
+    labels = np.array(region_pcd.cluster_dbscan(eps=0.008, min_points=50))
+
+    clusters_detected = np.unique(labels)
+    pcd_clusters = []
+    cluster_sizes = []
+    for seg_idx in clusters_detected:
+        seg_inds = np.where(labels == seg_idx)[0]
+        cluster = pcd[seg_inds]
+        pcd_clusters.append(cluster)
+        sz = cluster.shape[0]
+        cluster_sizes.append(sz)
+    top2sz = np.argsort(cluster_sizes)[-1]
+    # top2clusters = np.concatenate([pcd_clusters[top2sz[0]], pcd_clusters[top2sz[1]]], axis=0)
+    return pcd_clusters[top2sz]
     # if len(labels) == 0: return np.array([])
-    freq_label = mode(labels)[0][0]
-    max_pcd = pcd[np.where(labels == freq_label)]
-    if show_scene:
-        pcds = []
-        for label in set(labels):
-            label_pcd = pcd[np.where(labels == label)]
-            pcds.append(label_pcd)
-        trimesh_util.trimesh_show(pcds)
+    # freq_label = mode(labels)[0][0]
+    # max_pcd = pcd[np.where(labels == freq_label)]
+    # if show_scene:
+    #     pcds = []
+    #     for label in set(labels):
+    #         label_pcd = pcd[np.where(labels == label)]
+    #         pcds.append(label_pcd)
+    #     trimesh_util.trimesh_show(pcds)
     return max_pcd      
-
-def get_region(full_pcd, region):
-    xmin,ymin,xmax,ymax, = region
-    cropped_pcd = full_pcd[ymin:ymax,xmin:xmax,:]
-    flat_pcd = cropped_pcd.reshape((-1, 3))
-    return flat_pcd
-
-def get_obj_pcds(rgb, pts_raw, obj_classes):
-    obj_pcds = {}
-    height, width, _ = rgb.shape
-    pts_2d = pts_raw.reshape((height, width, 3))
-
-    obj_regions = detect_bbs(rgb, obj_classes)
-    for obj_class in obj_regions:
-        for i, region in enumerate(obj_regions[obj_class]):
-            region_pcd = get_region(pts_2d, region)
-            largest_cluster = get_largest_pcd(region_pcd, show_scene=False)
-            if largest_cluster.any(): continue
-            z = largest_cluster[:, 2]
-            min_z = z.min()
-
-            table_mask = np.where(z <= min_z+0.001)
-            obj_mask = np.where(z > min_z)
-            obj_pcd = largest_cluster[obj_mask]
-            trimesh_util.trimesh_show([obj_pcd])
-
-            # table_z_max, table_z_min =  
-            if obj_class not in obj_pcds:
-                obj_pcds[obj_class] = []
-            obj_pcds[obj_class].append(obj_pcd)
-    return obj_pcds
 
 def extend_pcds(cam_pcds, pcd_list, cam_scores, pcd_scores, threshold=0.08):
     '''
@@ -291,12 +293,12 @@ def extend_pcds(cam_pcds, pcd_list, cam_scores, pcd_scores, threshold=0.08):
 
     #might want to keep each camera's pcd seperated
     centroids = [np.average(partial_obj, axis=0) for partial_obj in pcd_list]
-    new_centroids = np.array([np.average(pcd, axis=0) for pcd in cam_pcds])
 
     # centroids = np.average(pcd_list, axis=1)
     # new_centroids = np.average(cam_pcds, axis=1)
     new_list = []
     for i, centroid in enumerate(centroids):
+        new_centroids = np.array([np.average(pcd, axis=0) for pcd in cam_pcds])
         if len(new_centroids) == 0: break
         diff = new_centroids-centroid
         centroid_dists = np.sqrt(np.sum(diff**2,axis=-1))
@@ -307,24 +309,35 @@ def extend_pcds(cam_pcds, pcd_list, cam_scores, pcd_scores, threshold=0.08):
         if centroid_dists[min_idx] <= threshold:
             updated_pcds = np.concatenate((updated_pcds, cam_pcds[min_idx]))
             pcd_scores[i].append(cam_scores.pop(min_idx)[0])
-            cam_pcds = np.delete(cam_pcds, min_idx, 0)
-            new_centroids = np.delete(new_centroids, min_idx, 0)
+            cam_pcds = np.delete(cam_pcds, min_idx, axis=0)
+            new_centroids = np.delete(new_centroids, min_idx, axis=0)
         new_list.append(updated_pcds)
+    else:
+        return pcd_list, pcd_scores
     return new_list + list(cam_pcds), pcd_scores + cam_scores
 
-def get_label_pcds(regions, pts_2d):
+def filter_pcds(pcds, scores):
     label_pcds = []
-    for region in regions:
-        region_pcd = get_region(pts_2d, region)
-        largest_cluster = get_largest_pcd(region_pcd, True)
-        z = largest_cluster[:, 2]
-        min_z = z.min()
+    label_scores = []
+    for i, full_pcd in enumerate(pcds):
+        largest_cluster = get_largest_pcd(full_pcd, show_scene=False)
+        obj_z = largest_cluster[:, 2]
+        min_z = full_pcd[:, 2].min()
 
-        table_mask = np.where(z <= min_z+0.01)
-        obj_mask = np.where(z > min_z+0.01)
-        obj_pcd = largest_cluster[obj_mask]
+        # table_mask = np.where(obj_z <= min_z+0.01)
+        # obj_mask = np.where(obj_z > min_z+0.005)
+        # obj_pcd = largest_cluster[obj_mask]
+        # largest_cluster_mean = np.mean(largest_cluster, axis=0)
+        # inliers = np.where(np.linalg.norm(largest_cluster - largest_cluster_mean, 2, 1) < 0.2)[0]
+        # largest_cluster = largest_cluster[inliers]
+
+        obj_pcd = largest_cluster
         label_pcds.append(obj_pcd)
-    return label_pcds
+        label_scores.append(scores[i])
+        log_debug(f'pcd of size {len(obj_pcd)} with score {scores[i]}')
+    # if label_pcds:
+    #     trimesh_util.trimesh_show(label_pcds)
+    return label_pcds, label_scores
 
 def mode(a, axis=0):
     scores = np.unique(np.ravel(a))       # get ALL unique values
@@ -341,3 +354,38 @@ def mode(a, axis=0):
         oldmostfreq = mostfrequent
 
     return mostfrequent, oldcounts
+
+def filter_regions(full_pcd, depth_valid, bbs, bb_scores):
+    filtered_regions = []
+    filtered_scores = []
+    for i, bb in enumerate(bbs):
+        xmin,ymin,xmax,ymax, = bb
+        camera_mask = depth_valid != 0
+        # camera_mask = np.where(depth >= .1)
+        camera_binary = np.zeros(depth_valid.shape)
+        camera_binary[camera_mask] = 1
+        bb_binary = np.zeros(depth_valid.shape)
+        bb_binary[xmin:xmax+1, ymin:ymax+1] = 1
+        joined_mask = np.logical_and(camera_binary, bb_binary)
+        full_pcd_copy = copy.deepcopy(full_pcd)
+        cropped_pcd = full_pcd_copy[joined_mask]
+        flat_pcd = cropped_pcd.reshape((-1, 3))
+        embed()
+        np.random.shuffle(flat_pcd)
+        downsampled_region = flat_pcd[::3]
+        if not downsampled_region.any():
+            continue
+        filtered_regions.append(downsampled_region)
+        filtered_scores.append(bb_scores[i])
+
+        after_camera = full_pcd_copy[np.logical_and(camera_binary, np.ones(depth_valid.shape))]
+        after_bb = full_pcd_copy[np.logical_and(bb_binary, np.ones(depth_valid.shape))]
+
+        trimesh_util.trimesh_show([downsampled_region, after_camera, after_bb])
+    if filtered_regions:
+        trimesh_util.trimesh_show(filtered_regions)
+        pass
+    else:
+        log_debug('After filtering, there are no more bbs')
+        embed()
+    return filtered_regions, filtered_scores

@@ -11,7 +11,7 @@ import sys
 sys.path.append(os.environ['SOURCE_DIR'])
 
 from rndf_robot.utils import util, path_util
-from ndf_robot.demonstrations.teleop import RobotTeleop
+from rndf_robot.demonstrations.teleop import RobotTeleop
 
 
 def main(args):

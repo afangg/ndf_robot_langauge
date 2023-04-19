@@ -168,9 +168,9 @@ model = OwlViTForObjectDetection.from_pretrained("google/owlvit-base-patch32")
 
 url = "http://images.cocodataset.org/val2017/000000039769.jpg"
 url_image = requests.get(url, stream=True).raw
-image = Image.open('IMG_0043.jpg')
+image = Image.open('IMG_0411.jpg')
 # texts = [["pick up the pink mug", "place it next to the blue mug",]]
-texts = [["a photo of a mug to the left of a bottle", "a photo of a mug to the right of a bottle", "a photo of a bottle between two mugs",]]
+texts = [["a photo of a container"]]
 
 inputs = processor(text=texts, images=image, return_tensors="pt")
 outputs = model(**inputs)

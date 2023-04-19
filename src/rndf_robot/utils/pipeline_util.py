@@ -97,10 +97,12 @@ def process_xq_rs_data(data, table_obj=None):
         return gt_place_demo_pts
 
 def process_demo_data(data, initial_pose=None, table_obj=None):
-    if initial_pose is None:
+    if not table_obj:
         demo_info, initial_pose = grasp_demo(data)
     else:
         demo_info = place_demo(data, initial_pose, table_obj=table_obj)
+        if not demo_info:
+            return False, None
 
     return demo_info, initial_pose
 
@@ -134,6 +136,12 @@ def grasp_demo(data):
     return target_info, data['obj_pose_world']
 
 def place_demo(place_data, initial_pose, table_obj=None):
+    if not initial_pose and place_data['grasp_obj_pose_world'] is None:
+        return False
+
+    if not initial_pose:
+        initial_pose = place_data['grasp_obj_pose_world']
+
     if table_obj==0:
         print('Place on shelf')
         place_pcd_gt = 'shelf_pointcloud_gt'

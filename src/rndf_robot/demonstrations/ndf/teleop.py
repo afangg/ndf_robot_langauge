@@ -6,6 +6,10 @@ from multiprocessing import Process, Pipe, Queue, Manager
 import signal
 import copy
 from pynput import keyboard
+
+import meshcat
+from meshcat import geometry as mcg
+from meshcat import transformations as mctf
 import trimesh
 import pybullet as p
 
@@ -52,12 +56,20 @@ KEY_MSG_MAP = {
     '1': 'DEMO_PICK',
     '2': 'DEMO_PLACE',
     '3': 'SKIP',
-    '4': 'ON_RACK',
+    '4': 'ON_RACK', 
     '5': 'OFF_RACK',
 }
 
 
 def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_dict, worker_id):
+
+    if worker_id == 0:
+        mc_vis = meshcat.Visualizer(zmq_url='tcp://127.0.0.1:6000')
+        print(f'MeshCat URL: {mc_vis.url()}')
+    else:
+        mc_vis = None
+    
+    grasp_obj_pose_world = None
     np.random.seed(global_dict['seed'])
     random.seed(global_dict['seed'])
     obj_class = global_dict['obj_class']
@@ -83,7 +95,7 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
 
             # general experiment + environment setup/scene generation configs
             cfg = get_eval_cfg_defaults()
-            config_fname = osp.join(path_util.get_rndf_config(), 'eval_cfgs', global_dict['config'] + '.yaml')
+            config_fname = osp.join(path_util.get_rndf_config(), 'eval_ndf_cfgs', global_dict['config'] + '.yaml')
             if osp.exists(config_fname):
                 cfg.merge_from_file(config_fname)
             else:
@@ -126,6 +138,15 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
             rack_pts_bb = rack_mesh.bounding_box_oriented
             rack_pts_uniform = rack_pts_bb.sample_volume(500)
 
+            # set up possible peg query points that are used in optimization
+            peg_mesh_file = osp.join(path_util.get_rndf_descriptions(), 'hanging/table/simple_peg.obj')
+            peg_mesh = trimesh.load_mesh(peg_mesh_file)
+            peg_pts_gt = peg_mesh.sample(500)
+            peg_pts_gaussian = np.random.normal(size=(500,3))
+            peg_pts_pcd_gt = trimesh.PointCloud(peg_pts_gt)
+            peg_pts_bb = peg_mesh.bounding_box_oriented
+            peg_pts_uniform = peg_pts_bb.sample_volume(500)
+
             # set up possible shelf query points that are used in optimization
             shelf_mesh_file = osp.join(path_util.get_rndf_descriptions(), 'hanging/table/shelf_back.stl')
             shelf_mesh = trimesh.load_mesh(shelf_mesh_file)
@@ -133,25 +154,33 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
             shelf_mesh_bb = shelf_mesh.bounding_box_oriented
             shelf_pts_uniform = shelf_mesh_bb.sample_volume(500)
 
-            have_rack = global_dict['have_rack']
-            have_shelf = global_dict['have_shelf']
-
-            if have_rack:
-                table_urdf_file = 'table_rack.urdf'
-            else:
-                table_urdf_file = 'table_shelf.urdf'
+            have = global_dict['have']
+            
+            if have == 'rack':
+                table_urdf_file = 'table_rack_manual.urdf'
+            elif have == 'shelf':
+                table_urdf_file = 'table_shelf_manual.urdf'
+            elif have == 'peg':
+                table_urdf_file = 'table_peg_manual.urdf'
+                rack_pts_uniform = peg_pts_uniform
+                rack_pts_gt=peg_pts_gt,
+                rack_pts_gaussian=peg_pts_gaussian,
+                # rack_pose_world=rack_pose_world,
+                # rack_contact_pose=rack_contact_pose,
             table_urdf = open(osp.join(path_util.get_rndf_descriptions(), 'hanging/table/%s' % table_urdf_file), 'r').read()
 
             table_ori = euler2quat([0, 0, np.pi / 2])
             table_id = robot.pb_client.load_urdf(osp.join(path_util.get_rndf_descriptions(), 'hanging/table', table_urdf_file),
                                     cfg.TABLE_POS, 
                                     table_ori,
-                                    scaling=cfg.TABLE_SCALING)
+                                    scaling=1.0)
 
             z = 0.06; y = np.abs(z*np.tan(np.deg2rad(40)))
             on_rack_offset = np.array([0, y, -z])
+            on_peg_offset = np.array([0, 0, -0.05])
             on_shelf_offset = np.array([0, 0, -0.05])
             off_rack_offset = -1.0 * on_rack_offset
+            off_peg_offset = -1.0 * on_peg_offset
             off_shelf_offset = -1.0 * on_shelf_offset
 
             obj_id = None
@@ -247,12 +276,12 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
             continue
         if msg == "ON_RACK":
             safeCollisionFilterPair(bodyUniqueIdA=obj_id, bodyUniqueIdB=table_id, linkIndexA=-1, linkIndexB=rack_link_id, enableCollision=False)
-            robot.arm.move_ee_xyz(on_rack_offset)
+            robot.arm.move_ee_xyz(on_rack_offset if global_dict['have'] == 'rack' else on_peg_offset) 
             time.sleep(1.0)
             continue
         if msg == "OFF_RACK":
             safeCollisionFilterPair(bodyUniqueIdA=obj_id, bodyUniqueIdB=table_id, linkIndexA=-1, linkIndexB=rack_link_id, enableCollision=False)
-            robot.arm.move_ee_xyz(off_rack_offset)
+            robot.arm.move_ee_xyz(off_rack_offset if global_dict['have'] == 'rack' else off_peg_offset)
             time.sleep(1.0)
             continue
         if msg == "ON_SHELF":
@@ -288,31 +317,31 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
             table_id = robot.pb_client.load_urdf(osp.join(path_util.get_rndf_descriptions(), 'hanging/table', table_urdf_file),
                                     cfg.TABLE_POS,
                                     table_ori,
-                                    scaling=cfg.TABLE_SCALING)
-
+                                    scaling=1.0)
+            # if mc_vis is not None:
+            #     mc_vis['scene/table'].delete()
+            #     mc_vis['scene/table'].set_object(mcg.Box([1.0, 1.0, 0.01]))
+            #     # mc_vis['scene/table'].set_transform(mctf.translation_matrix([0, 0, 0.98]))
+            
             shapenet_id = global_dict['shapenet_id']
             print('\n\nUsing shapenet id: %s\n\n' % shapenet_id)
             upright_orientation = global_dict['upright_ori']
             obj_obj_file = global_dict['object_obj_file']
             obj_class = global_dict['object_class']
-            have_rack = global_dict['have_rack']
-            have_shelf = global_dict['have_shelf']
 
             table_link_id = -1
-            if have_rack:
+            if global_dict['have'] == 'rack' or global_dict['have'] == 'peg':
                 rack_link_id = 0
                 shelf_link_id = 1
                 place_color = p.getVisualShapeData(table_id)[rack_link_id][7]
                 place_link_id = rack_link_id
-            else:
+            elif global_dict['have'] == 'shelf':
                 rack_link_id = 0
                 shelf_link_id = 0
                 place_color = p.getVisualShapeData(table_id)[shelf_link_id][7]
                 place_link_id = shelf_link_id
+            place_link_id = 0
 
-            # convert mesh with vhacd
-            from IPython import embed
-            embed()
             obj_obj_file_dec = obj_obj_file.split('.obj')[0] + '_dec.obj'
             if not osp.exists(obj_obj_file_dec):
                 print('converting via VHACD')
@@ -372,6 +401,8 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
 
             obj_pose_world = p.getBasePositionAndOrientation(obj_id)
             obj_pose_world = util.list2pose_stamped(list(obj_pose_world[0]) + list(obj_pose_world[1]))
+            obj_pose_world_np = util.pose_stamped2np(obj_pose_world)
+
             print('object pose world: ', util.pose_stamped2list(obj_pose_world))
             cam_intrinsics = []
 
@@ -417,8 +448,8 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
                 seg_idxs.append(obj_inds)
             
             # now go back through and also get point clouds representing your environment objects 
-            print('Have shelf: %s' % have_shelf)
-            if have_shelf:
+            print('Have shelf: %s' % global_dict['have'] == 'shelf')
+            if global_dict['have'] == 'shelf':
                 shelf_pose_world = np.concatenate(p.getLinkState(table_id, shelf_link_id)[:2]).tolist()
                 print('Shelf pose world: ', shelf_pose_world)
 
@@ -448,6 +479,21 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
             pix_3d = np.concatenate(obj_pcd_pts, axis=0)
             table_pix_3d = np.concatenate(table_pcd_pts, axis=0)
             shelf_pix_3d = np.concatenate(shelf_pcd_pts, axis=0)
+            rack_pix_3d = np.concatenate(rack_pcd_pts, axis=0)
+
+            if mc_vis is not None:        
+                util.meshcat_pcd_show(mc_vis, table_pix_3d, color=(255, 0, 0), name='scene/table_pcd')
+                util.meshcat_pcd_show(mc_vis, rack_pix_3d, color=(0, 0, 255), name='scene/rack_pcd')
+
+
+                util.meshcat_pcd_show(mc_vis, pix_3d, color=(100, 100, 0), name='scene/object_pcd')
+                mc_vis['scene/object'].delete()
+                # tmesh = trimesh.load(obj_file_to_load).apply_transform(util.matrix_from_list(obj_pose_world_np))
+                # util.meshcat_trimesh_show(mc_vis, 'scene/object', tmesh)
+                mc_vis['scene/object'].set_object(mcg.ObjMeshGeometry.from_file(obj_obj_file_dec))
+                mc_vis['scene/object'].set_transform(util.scale_matrix(mesh_scale))
+                mc_mat = np.matmul(util.matrix_from_pose(util.list2pose_stamped(obj_pose_world_np)), util.scale_matrix(mesh_scale))
+                mc_vis['scene/object'].set_transform(mc_mat)
 
             #robot.arm.go_home(ignore_physics=True)
             robot.arm.set_jpos(new_home, ignore_physics=True)
@@ -508,6 +554,7 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
                 pcd_raw=pcd_raw,
                 cam_intrinsics=cam_intrinsics
             )
+            grasp_obj_pose_world = obj_pose_world.copy()
 
             time.sleep(1.0)
             continue
@@ -545,6 +592,9 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
                     print(pt[8])
                 rack_contact_pose[:3] = np.asarray(rack_closest_points[0][5])
 
+            if mc_vis is not None:
+                util.meshcat_pcd_show(mc_vis, rack_closest_points, color=(0, 255, 0), name='scene/rack_contact')
+
             place_save_path = osp.join(save_dir, 'place_demo_' + str(shapenet_id) + '.npz')
             cur_demo_iter = 0
             while True:
@@ -554,12 +604,16 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
                 else:
                     break
             print('saving to: %s' % place_save_path)
+            if grasp_obj_pose_world is None:
+                print("grasp_obj_pose_world IS NONE!")
+
             np.savez(
                 place_save_path,
                 shapenet_id=shapenet_id,
                 ee_pose_world=np.asarray(ee_pose_world),
                 robot_joints=np.asarray(robot_joints),
                 obj_pose_world=np.asarray(obj_pose_world),
+                grasp_obj_pose_world=grasp_obj_pose_world,
                 obj_pose_camera=obj_pose_camera_np,
                 object_pointcloud=pix_3d,
                 rgb=rgb_imgs,

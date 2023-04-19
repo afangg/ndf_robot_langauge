@@ -28,7 +28,7 @@ from rndf_robot.utils.pipeline_util import (
     constraint_obj_world,
 )
 from rndf_robot.utils.rndf_utils import infer_relation_intersection, create_target_descriptors
-from system_utils.segmentation import detect_bbs, get_label_pcds, extend_pcds
+from system_utils.segmentation import detect_bbs, filter_pcds, extend_pcds, filter_regions
 from system_utils.language import query_correspondance, chunk_query, create_keyword_dic
 from system_utils.demos import all_demos, get_concept_demos, create_target_desc_subdir, get_model_paths
 import system_utils.objects as objects
@@ -56,7 +56,7 @@ class Pipeline():
 
         # self.cfg = get_eval_cfg_defaults()
         self.cfg = self.get_env_cfgs()
-        self.meshes_dic = objects.load_meshes_dict(self.cfg)
+        # self.meshes_dic = objects.load_meshes_dict(self.cfg)
 
         self.ranked_objs = {}
         self.obj_info = {}
@@ -132,9 +132,9 @@ class Pipeline():
         #     roll=0)
         serials = [
             '143122065292',
-            '840412060551',
+            '843112073228',
             '215122255998',
-            '843112073228'
+            '840412060551'
         ]
 
         prefix = 'cam_'
@@ -157,9 +157,6 @@ class Pipeline():
         # pipelines = enable_devices(serials, ctx, resolution_width, resolution_height, frame_rate)
         self.pipelines = enable_devices(np.array(serials)[cam_index], ctx, resolution_width, resolution_height, frame_rate)
         self.cam_interface = RealsenseLocal()
-
-        #TODO: Connect to the Realsense cameras
-
 
     def get_real_pcd(self):
         pcd_pts = []
@@ -200,10 +197,11 @@ class Pipeline():
             pcd_dict_list.append(pcd_dict)
 
         pcd_full = np.concatenate(pcd_pts, axis=0)
+        util.meshcat_pcd_show(self.viz.mc_vis, pcd_full, color=(0, 255, 0), name='scene/full_scene')
+
         return pcd_full
 
     def get_real_pcd_cam(self, idx, rgb, depth):
-        embed()
         cam = self.cams.cams[idx]
         cam_intrinsics = self.cam_interface.get_intrinsics_mat(self.pipelines[idx])
 
@@ -228,7 +226,7 @@ class Pipeline():
         #     'cam_pose_mat': cam_pose_world
         # }
 
-        return pcd_world
+        return pcd_world_img, depth_valid
     
     def setup_table(self):            
         table_fname = osp.join(path_util.get_rndf_descriptions(), 'hanging/table')
@@ -412,7 +410,8 @@ class Pipeline():
         '''
         log_debug('All demo labels: %s' %all_demos.keys())
         while True:
-            query = self.ask_query()
+            # query = self.ask_query()
+            query = "place mug_over_container", "empty the mug into the green tray"
             if not query: return
             corresponding_concept, query_text = query
             demos = get_concept_demos(corresponding_concept)
@@ -508,7 +507,7 @@ class Pipeline():
         '''
         all_obj_classes = set(objects.mesh_data_dirs.keys())
         concept_key = corresponding_concept.split(' ')[-1]
-        concept_language = frozenset(concept_key.lower().replace('_', ' ').split(' '))
+        concept_language = frozenset(query.lower().replace('_', ' ').split(' '))
         relevant_classes = concept_language.intersection(all_obj_classes)
         chunked_query = chunk_query(query)
         keywords = create_keyword_dic(relevant_classes, chunked_query)
@@ -542,7 +541,7 @@ class Pipeline():
                 self.ranked_objs[priority_rank]['description'] = keyword[1]
                 self.ranked_objs[priority_rank]['potential_class'] = keyword[0]
             else:
-                if self.state != 2 and len(keywords) > 2:
+                if self.state != 2 and len(keywords) > 1:
                     log_warn('There is more than one noun mentioned in the query and unsure what to do')
                     return
                 pair_1, pair_2 = keywords
@@ -556,8 +555,8 @@ class Pipeline():
 
                 for i in range(2):
                     self.ranked_objs[i] = {}
-                    self.ranked_objs[1]['description'] = pairs[i][1]
-                    self.ranked_objs[0]['potential_class'] = pairs[i][0]
+                    self.ranked_objs[i]['description'] = pairs[i][1]
+                    self.ranked_objs[i]['potential_class'] = pairs[i][0]
 
         target = 'Target - class:%s, descr: %s'% (self.ranked_objs[0]['potential_class'], self.ranked_objs[0]['description'])
         log_debug(target)
@@ -590,7 +589,8 @@ class Pipeline():
                 continue
             # just pick the last pcd
             new_pcds = []
-            for score, pcd in labels_to_pcds[pcd_key]:
+            for pcd_tup in labels_to_pcds[pcd_key]:
+                score, pcd = pcd_tup
                 if assigned_centroids.any():
                     diff = assigned_centroids-np.average(pcd, axis=0)
                     centroid_dists = np.sqrt(np.sum(diff**2,axis=-1))
@@ -600,11 +600,11 @@ class Pipeline():
             self.ranked_objs[obj_rank]['pcd'] = new_pcds.pop(-1)
             if self.args.show_pcds:
                 log_debug(f'Best score was {score}')
-                trimesh_util.trimesh_show([self.ranked_objs[obj_rank]['pcd']])
+                # trimesh_util.trimesh_show([self.ranked_objs[obj_rank]['pcd']])
 
         with self.viz.recorder.meshcat_scene_lock:
-            for _, obj in self.ranked_objs.items():
-                label = 'scene/%s_pcd' % obj['description']
+            for rank, obj in self.ranked_objs.items():
+                label = f'scene/initial_{rank}_pcd'
                 color = [random.randint(0,255), random.randint(0,255), random.randint(0,255)]
                 util.meshcat_pcd_show(self.viz.mc_vis, obj['pcd'], color=color, name=label)
 
@@ -621,46 +621,63 @@ class Pipeline():
                     
         label_to_pcds = {}
         label_to_scores = {}
-        threshold = 0.08
+        centroid_thresh = 0.1
+        detect_thresh = 0.12
+        # self.get_real_pcd()
 
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
-            # rgb, depth, _ = cam.get_images(get_rgb=True, get_depth=True, get_seg=True)
             rgb, depth = self.cam_interface.get_rgb_and_depth_image(self.pipelines[i])
-            # pts_raw, _ = cam.get_pcd(in_world=True, rgb_image=rgb, depth_image=depth, depth_min=0.0, depth_max=np.inf)
-            pts_raw = self.get_real_pcd_cam(i, rgb, depth)
-            height, width, _ = rgb.shape
-            pts_2d = pts_raw.reshape((height, width, 3))
-            obj_bbs, cam_scores = detect_bbs(rgb, captions)
-            log_debug(f'Detected the following captions {obj_bbs.keys()}')
-            # embed()
-            for obj_label, regions in obj_bbs.items():
-                log_debug(f'Region count for {obj_label}: {len(regions)}')
+            pts_2d, depth_valid = self.get_real_pcd_cam(i, rgb, depth)
 
-                cam_pcds = get_label_pcds(regions, pts_2d)
+            all_obj_bbs, all_obj_bb_scores = detect_bbs(rgb, 
+                                                        captions, 
+                                                        max_count=1, 
+                                                        score_threshold=detect_thresh)
+            log_debug(f'Detected the following captions {all_obj_bb_scores.keys()}')
+
+            for obj_label, obj_bbs in all_obj_bbs.items():
+                log_debug(f'Region count for {obj_label}: {len(obj_bbs)}')
+                obj_bbs, obj_bb_scores = filter_regions(pts_2d, depth_valid, obj_bbs, all_obj_bb_scores[obj_label])
+                log_debug(f'{obj_label} after filtering is now {len(obj_bbs)}')
+                for j in range(len(obj_bbs)):
+                    util.meshcat_pcd_show(self.viz.mc_vis, obj_bbs[j], color=(0, 255, 0), name=f'scene/cam_{i}_{obj_label}_region_{j}')
+
+                cam_pcds, cam_scores = filter_pcds(obj_bbs, obj_bb_scores)
+                if not cam_pcds:
+                    continue
+                for k in range(len(cam_pcds)):
+                    util.meshcat_pcd_show(self.viz.mc_vis, cam_pcds[k], color=(0, 0, 255), name=f'scene/cam_{i}_{obj_label}_pcd_{k}')
+
                 if obj_label not in label_to_pcds:
-                    label_to_pcds[obj_label], label_to_scores[obj_label] = cam_pcds, cam_scores[obj_label]
+                    label_to_pcds[obj_label], label_to_scores[obj_label] = cam_pcds, cam_scores
                 else:
-                    label_to_pcds[obj_label], label_to_scores[obj_label] = extend_pcds(cam_pcds, label_to_pcds[obj_label], 
-                                                                                        cam_scores[obj_label], label_to_scores[obj_label], threshold=threshold-0.01*i)
+                    new_pcds, new_lables = extend_pcds(cam_pcds, 
+                                                       label_to_pcds[obj_label], 
+                                                       cam_scores, 
+                                                       label_to_scores[obj_label], 
+                                                       threshold=centroid_thresh)
+                    label_to_pcds[obj_label], label_to_scores[obj_label] = new_pcds, new_lables
                 log_debug(f'{obj_label} size is now {len(label_to_pcds[obj_label])}')
             
         pcds_output = {}
+        embed()
         for obj_label in captions:
             if obj_label not in label_to_pcds:
                 log_warn('WARNING: COULD NOT FIND RELEVANT OBJ')
                 break
             obj_pcd_sets = label_to_pcds[obj_label]
             for i, target_obj_pcd_obs in enumerate(obj_pcd_sets):
-                target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
-                inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
-                target_obj_pcd_obs = target_obj_pcd_obs[inliers]
+                # target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
+                # inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
+                # target_obj_pcd_obs = target_obj_pcd_obs[inliers]
+                # if not target_obj_pcd_obs.any(): continue
                 score = np.average(label_to_scores[obj_label][i])
                 if obj_label not in pcds_output:
                     pcds_output[obj_label] = []
                 pcds_output[obj_label].append((score, target_obj_pcd_obs))
-                # if self.args.debug:
-                #     trimesh_util.trimesh_show([target_obj_pcd_obs])
+                if self.args.debug:
+                    trimesh_util.trimesh_show([target_obj_pcd_obs])
         return pcds_output
 
     #################################################################################################
@@ -682,18 +699,17 @@ class Pipeline():
 
         for fname in self.skill_demos[:min(n, len(self.skill_demos))]:
             demo = np.load(fname, allow_pickle=True)
-            if 'shapenet_id' not in demo:
-                continue
-            obj_id = demo['shapenet_id'].item()
+            if 'shapenet_id' in demo:
+                obj_id = demo['shapenet_id'].item()
 
             if self.state == 0:
-                target_info, initial_pose = process_demo_data(demo, table_obj=self.table_obj)
+                target_info, initial_pose = process_demo_data(demo, initial_pose = None, table_obj=None)
                 self.ranked_objs[0]['demo_start_poses'].append(initial_pose)
-            elif obj_id in self.ranked_objs[0]['demo_start_poses']:
-                target_info, _ = process_demo_data(demo, self.initial_poses[obj_id], table_obj=self.table_obj)
-                # del self.initial_poses[obj_id]
             else:
-                continue
+                grasp_pose = util.pose_stamped2list(util.unit_pose())
+                target_info, _ = process_demo_data(demo, grasp_pose, table_obj=self.table_obj)
+                if not target_info: continue
+
             
             if target_info is not None:
                 self.ranked_objs[0]['demo_info'].append(target_info)
@@ -730,14 +746,18 @@ class Pipeline():
             for demo_path in self.skill_demos[:min(n, len(self.skill_demos))]:
                 demo = np.load(demo_path, allow_pickle=True)
                 s_pcd = demo['multi_obj_start_pcd'].item()[demo_key]
-                f_pcd = demo['multi_obj_final_pcd'].item()[demo_key]
-                obj_ids = demo['multi_object_ids'].item()[demo_key]
-                start_pose = demo['multi_obj_start_obj_pose'].item()[demo_key]
+                if 'multi_obj_final_pcd' in demo:
+                    f_pcd = demo['multi_obj_final_pcd'].item()[demo_key]
+                else:
+                    f_pcd = s_pcd
+                if 'multi_object_ids' in demo:
+                    obj_ids = demo['multi_object_ids'].item()[demo_key]
+                    start_pose = demo['multi_obj_start_obj_pose'].item()[demo_key]
+                    self.ranked_objs[obj_rank]['demo_ids'].append(obj_ids)
+                    self.ranked_objs[obj_rank]['demo_start_poses'].append(start_pose)
 
                 self.ranked_objs[obj_rank]['demo_start_pcds'].append(s_pcd)
                 self.ranked_objs[obj_rank]['demo_final_pcds'].append(f_pcd)
-                self.ranked_objs[obj_rank]['demo_ids'].append(obj_ids)
-                self.ranked_objs[obj_rank]['demo_start_poses'].append(start_pose)
                 
         demo_path = osp.join(path_util.get_rndf_data(), 'release_demos', concept)
         relational_model_path, target_model_path = self.ranked_objs[1]['model_path'], self.ranked_objs[0]['model_path']
@@ -927,15 +947,20 @@ class Pipeline():
 
     #########################################################################################################
     # Motion Planning 
-    def execute(self, obj_rank, ee_poses):
+    def execute(self, obj_pcd, ee_poses):
         obj_id = None
-        if 'obj_id' in self.ranked_objs[obj_rank]:
-            obj_id = self.ranked_objs[obj_rank]['obj_rd']
+        # if 'obj_id' in self.ranked_objs[obj_rank]:
+        #     obj_id = self.ranked_objs[obj_rank]['obj_id']
+        # else:
+        #     log_warn('Can not teleport an object without its obj_id')
+        #     return
+    
+        if obj_id:
+            self.pre_execution(obj_id)
 
         if self.state == 2:
-            self.teleport(obj_id, ee_poses[0])
+            self.teleport_pcd(obj_pcd, ee_poses)
         else:
-            self.pre_execution(obj_id)
             jnt_poses = self.get_iks(ee_poses)
 
             prev_pos = self.robot.arm.get_jpos()
@@ -951,9 +976,9 @@ class Pipeline():
                 self.move_robot(plan)
                 prev_pos = jnt_pos
                 # input('Press enter to continue')
-
-            self.post_execution(obj_id)
-            time.sleep(1.0)
+        # if obj_id:
+        #     self.post_execution(obj_id)
+        #     time.sleep(1.0)
 
     def get_iks(self, ee_poses):
         return [self.cascade_ik(pose) for pose in ee_poses]
@@ -982,15 +1007,31 @@ class Pipeline():
 
         self.robot.pb_client.reset_body(obj_id, final_pos, final_ori)
 
-        if self.obj_info[obj_id]['class'] not in ['syn_rack_easy', 'syn_rack_med', 'rack']:
-            obj_rank = self.obj_info[obj_id]['rank']
-            safeRemoveConstraint(self.ranked_objs[obj_rank]['o_cid'])
-
         final_pcd = util.transform_pcd(self.obj_info[obj_id]['pcd'], transform)
         with self.viz.recorder.meshcat_scene_lock:
             util.meshcat_pcd_show(self.viz.mc_vis, final_pcd, color=[255, 0, 255], name=f'scene/{obj_id}_pcd')
 
         safeCollisionFilterPair(obj_id, self.table_id, -1, 0, enableCollision=False)
+        time.sleep(5.0)
+        # turn on the physics and let things settle to evaluate success/failure
+        self.robot.pb_client.set_step_sim(False)
+
+    def teleport_pcd(self, obj_pcd, relative_pose):
+        # transform = util.matrix_from_pose(util.list2pose_stamped(relative_pose))
+        # start_pose = np.concatenate(self.robot.pb_client.get_body_state(obj_id)[:2]).tolist()
+        # start_pose_mat = util.matrix_from_pose(util.list2pose_stamped(start_pose))
+        # final_pose_mat = np.matmul(transform, start_pose_mat)
+        # self.robot.pb_client.set_step_sim(True)
+        # final_pose_list = util.pose_stamped2list(util.pose_from_matrix(final_pose_mat))
+        # final_pos, final_ori = final_pose_list[:3], final_pose_list[3:]
+
+        # self.robot.pb_client.reset_body(obj_id, final_pos, final_ori)
+
+        final_pcd = util.transform_pcd(obj_pcd, relative_pose)
+        with self.viz.recorder.meshcat_scene_lock:
+            util.meshcat_pcd_show(self.viz.mc_vis, final_pcd, color=[255, 0, 255], name=f'scene/final_0_pcd')
+
+        # safeCollisionFilterPair(obj_id, self.table_id, -1, 0, enableCollision=False)
         time.sleep(5.0)
         # turn on the physics and let things settle to evaluate success/failure
         self.robot.pb_client.set_step_sim(False)

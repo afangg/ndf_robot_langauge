@@ -11,7 +11,7 @@ import sys
 sys.path.append(os.environ['SOURCE_DIR'])
 
 from rndf_robot.utils import util, path_util
-from rndf_robot.demonstrations.teleop import RobotTeleop
+from rndf_robot.demonstrations.ndf.teleop import RobotTeleop
 
 
 def main(args):
@@ -48,14 +48,17 @@ def main(args):
     manager.global_dict['num_samples'] = 0
     manager.global_dict['config'] = args.config
 
-    have_rack = args.with_rack
-    have_shelf = args.with_shelf
-    if (have_rack and have_shelf) or (not have_rack and not have_shelf):
-        print('"have_rack" and "have_shelf" cannot both be True/False. Defaulting to "have_rack" equal True')
-        have_rack = True
+    have_list = []
+    if args.with_rack:
+        have_list.append('rack')
+    if args.with_shelf:
+        have_list.append('shelf')
+    if args.with_peg:
+        have_list.append('peg')
 
-    manager.global_dict['have_rack'] = have_rack
-    manager.global_dict['have_shelf'] = have_shelf
+    if len(have_list) > 1:
+        print(f'There are multiple objects to load, just loading {have_list[0]}')
+    manager.global_dict['have'] = have_list[0]
     manager.global_dict['fixed_angle'] = args.fixed_angle
 
     if osp.exists(osp.join(save_dir, 'demo_skipped_ids.npz')):
@@ -129,6 +132,7 @@ if __name__ == "__main__":
     parser.add_argument('--fixed_angle', action='store_true')
     parser.add_argument('--with_rack', action='store_true')
     parser.add_argument('--with_shelf', action='store_true')
+    parser.add_argument('--with_peg', action='store_true')
 
     args = parser.parse_args()
     main(args)

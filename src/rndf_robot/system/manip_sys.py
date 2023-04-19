@@ -26,7 +26,8 @@ def main(pipeline, generate_new_scene=True):
     if pipeline.args.pb_seg:
         labels_to_pcds = pipeline.segment_scene_pb()
     else:
-        labels_to_pcds = pipeline.segment_scene(keywords)
+        descriptions = [keyword[1] if keyword[1] else keyword[0] for keyword in keywords]
+        labels_to_pcds = pipeline.segment_scene(descriptions)
     if not labels_to_pcds:
         log_warn('WARNING: Target object not detected, resetting the scene')
         pipeline.reset()
@@ -39,11 +40,8 @@ def main(pipeline, generate_new_scene=True):
     pipeline.load_models()
 
     ee_poses = pipeline.find_correspondence()
-    if pipeline.state == 2:
-        pipeline.teleport_obj(0, ee_poses)
-    else:
-        # can only teleport obj_id
-        pipeline.execute(0, ee_poses)
+    pipeline.execute(0, ee_poses)
+
 
     if pipeline.state == 0:
         return pipeline.step(ee_poses[-1])

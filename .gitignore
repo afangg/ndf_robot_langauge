@@ -1,6 +1,7 @@
 *.pyc
 **/visualization
 **/demos
+**/real_demo_data**
 **/release_demos
 **/descriptions/objects
 **/__pycache__
@@ -9,3 +10,5 @@ log.txt
 **/eval_data
 **/**.egg-info
 **/real_demo_data
+**.html
+**.jpg

@@ -554,7 +554,10 @@ class Pipeline():
             #choose one that is unique
             new_pcds = []
             for pcd_tup in labels_to_pcds[pcd_key]:
-                score, pcd, _ = pcd_tup
+                if len(pcd_tup) == 3:
+                    score, pcd, _ = pcd_tup
+                else:
+                    score, pcd = pcd_= pcd_tup
                 if assigned_centroids.any():
                     diff = assigned_centroids-np.average(pcd, axis=0)
                     centroid_dists = np.sqrt(np.sum(diff**2,axis=-1))
@@ -633,8 +636,8 @@ class Pipeline():
                     
         label_to_pcds = {}
         label_to_scores = {}
-        threshold = 0.08
-
+        centroid_thresh = 0.08
+        detect_thresh = 0.05
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
             rgb, depth, pyb_seg = cam.get_images(get_rgb=True, get_depth=True, get_seg=True)
@@ -642,7 +645,7 @@ class Pipeline():
 
             height, width, _ = rgb.shape
             pts_2d = pts_raw.reshape((height, width, 3))
-            obj_bbs, cam_scores = detect_bbs(rgb, captions)
+            obj_bbs, cam_scores = detect_bbs(rgb, captions, score_threshold=detect_thresh)
             log_debug(f'Detected the following captions {obj_bbs.keys()}')
             # embed()
             for obj_label, regions in obj_bbs.items():
@@ -653,7 +656,7 @@ class Pipeline():
                     label_to_pcds[obj_label], label_to_scores[obj_label] = cam_pcds, cam_scores[obj_label]
                 else:
                     label_to_pcds[obj_label], label_to_scores[obj_label] = extend_pcds(cam_pcds, label_to_pcds[obj_label], 
-                                                                                       cam_scores[obj_label], label_to_scores[obj_label], threshold=threshold-0.01*i)
+                                                                                       cam_scores[obj_label], label_to_scores[obj_label], threshold=centroid_thresh-0.01*i)
                 log_debug(f'{obj_label} size is now {len(label_to_pcds[obj_label])}')
             
         pcds_output = {}
@@ -667,6 +670,7 @@ class Pipeline():
                 target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
                 inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
                 target_obj_pcd_obs = target_obj_pcd_obs[inliers]
+                if not target_obj_pcd_obs: continue
                 score = np.average(label_to_scores[obj_label][i])
                 if obj_label not in pcds_output:
                     pcds_output[obj_label] = []
@@ -699,13 +703,13 @@ class Pipeline():
             obj_id = demo['shapenet_id'].item()
 
             if self.state == 0:
-                target_info, initial_pose = process_demo_data(demo, table_obj=self.table_obj)
+                target_info, initial_pose = process_demo_data(demo, initial_pose = None, table_obj=None)
                 self.ranked_objs[0]['demo_start_poses'].append(initial_pose)
-            elif obj_id in self.ranked_objs[0]['demo_start_poses']:
-                target_info, _ = process_demo_data(demo, self.initial_poses[obj_id], table_obj=self.table_obj)
-                # del self.initial_poses[obj_id]
             else:
-                continue
+                grasp_pose = self.ranked_objs[0]['demo_start_poses'].get(obj_id, None)
+                target_info, _ = process_demo_data(demo, grasp_pose, table_obj=self.table_obj)
+                if not target_info: continue
+
             
             if target_info is not None:
                 self.ranked_objs[0]['demo_info'].append(target_info)
@@ -943,14 +947,16 @@ class Pipeline():
         obj_id = None
         if 'obj_id' in self.ranked_objs[obj_rank]:
             obj_id = self.ranked_objs[obj_rank]['obj_id']
+        else:
+            log_warn('Can not teleport an object without its obj_id')
+            return
+    
+        if obj_id:
+            self.pre_execution(obj_id)
 
         if self.state == 2:
-            if obj_id:
-                self.teleport(obj_id, ee_poses[0])
-            else:
-                log_warn('Can not teleport an object without its sim ID')
+            self.teleport(obj_id, ee_poses)
         else:
-            self.pre_execution(obj_id)
             jnt_poses = self.get_iks(ee_poses)
 
             prev_pos = self.robot.arm.get_jpos()
@@ -966,7 +972,7 @@ class Pipeline():
                 self.move_robot(plan)
                 prev_pos = jnt_pos
                 # input('Press enter to continue')
-
+        if obj_id:
             self.post_execution(obj_id)
             time.sleep(1.0)
 
@@ -1009,7 +1015,8 @@ class Pipeline():
         return jnt_pos
 
     def teleport(self, obj_id, relative_pose):
-        transform = util.matrix_from_pose(util.list2pose_stamped(relative_pose))
+        embed()
+        transform = util.matrix_from_pose(util.list2pose_stamped(relative_pose[0]))
         start_pose = np.concatenate(self.robot.pb_client.get_body_state(obj_id)[:2]).tolist()
         start_pose_mat = util.matrix_from_pose(util.list2pose_stamped(start_pose))
         final_pose_mat = np.matmul(transform, start_pose_mat)
@@ -1018,10 +1025,6 @@ class Pipeline():
         final_pos, final_ori = final_pose_list[:3], final_pose_list[3:]
 
         self.robot.pb_client.reset_body(obj_id, final_pos, final_ori)
-
-        if self.obj_info[obj_id]['class'] not in ['syn_rack_easy', 'syn_rack_med', 'rack']:
-            obj_rank = self.obj_info[obj_id]['rank']
-            safeRemoveConstraint(self.ranked_objs[obj_rank]['o_cid'])
 
         final_pcd = util.transform_pcd(self.obj_info[obj_id]['pcd'], transform)
         with self.viz.recorder.meshcat_scene_lock:
