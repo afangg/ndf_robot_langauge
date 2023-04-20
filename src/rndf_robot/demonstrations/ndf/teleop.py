@@ -483,8 +483,10 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
 
             if mc_vis is not None:        
                 util.meshcat_pcd_show(mc_vis, table_pix_3d, color=(255, 0, 0), name='scene/table_pcd')
-                util.meshcat_pcd_show(mc_vis, rack_pix_3d, color=(0, 0, 255), name='scene/rack_pcd')
-
+                if rack_pix_3d.any():
+                    util.meshcat_pcd_show(mc_vis, rack_pix_3d, color=(0, 0, 255), name='scene/rack_pcd')
+                if shelf_pix_3d.any():
+                    util.meshcat_pcd_show(mc_vis, shelf_pix_3d, color=(0, 0, 255), name='scene/shelf_pcd')      
 
                 util.meshcat_pcd_show(mc_vis, pix_3d, color=(100, 100, 0), name='scene/object_pcd')
                 mc_vis['scene/object'].delete()
@@ -584,7 +586,7 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
                 distance=0.005,
                 linkIndexA=-1,
                 linkIndexB=rack_link_id)
-
+            
             sorted(rack_closest_points, key=lambda pt_info: pt_info[8])
             rack_contact_pose = copy.deepcopy(rack_pose_world)
             if len(rack_closest_points):
@@ -593,7 +595,7 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
                 rack_contact_pose[:3] = np.asarray(rack_closest_points[0][5])
 
             if mc_vis is not None:
-                util.meshcat_pcd_show(mc_vis, rack_closest_points, color=(0, 255, 0), name='scene/rack_contact')
+                util.meshcat_pcd_show(mc_vis, rack_closest_points, color=(100, 100, 0), name='scene/rack_contact')
 
             place_save_path = osp.join(save_dir, 'place_demo_' + str(shapenet_id) + '.npz')
             cur_demo_iter = 0
