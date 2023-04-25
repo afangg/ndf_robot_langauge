@@ -131,7 +131,6 @@ def main(args):
     prefix = rs_cfg.CAMERA_NAME_PREFIX
     camera_names = [f'{prefix}{i}' for i in range(len(serials))]
     cam_list = [camera_names[int(idx)] for idx in args.cam_index]
-    serials = [serials[int(idx)] for idx in args.cam_index]
 
     calib_dir = osp.join(path_util.get_rndf_src(), 'robot/camera_calibration_files')
     calib_filenames = [osp.join(calib_dir, f'cam_{idx}_calib_base_to_cam.json') for idx in args.cam_index]

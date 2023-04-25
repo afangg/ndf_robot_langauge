@@ -26,11 +26,10 @@ def main(pipeline):
     pipeline.load_models()
 
     ee_poses = pipeline.find_correspondence()
-    pipeline.execute(0, ee_poses)
-
+    pipeline.execute(ee_poses)
 
     if pipeline.state == 0:
-        return pipeline.step(ee_poses[-1])
+        return pipeline.step(obj_grasped=True)
     else:
         return pipeline.step()
 
@@ -69,6 +68,9 @@ if __name__ == "__main__":
     parser.add_argument('--noise_idx', type=int, default=0)
     parser.add_argument('--cam_index', nargs='+', help='set which cameras to get point cloud from', required=True)
 
+    parser.add_argument('--pb_seg', action='store_true')
+    parser.add_argument('--gripper_type', type=str, default='panda')
+
     args = parser.parse_args()
 
     if args.debug:
@@ -82,11 +84,5 @@ if __name__ == "__main__":
     pipeline = Pipeline(args)
     pipeline.setup_client()
 
-    server = VizServer(pipeline.robot.pb_client, port_vis=6000)
-    pipeline.register_vizServer(server)
-
-    pipeline.setup_table()
-    pipeline.reset_robot()
-    log_info('Loaded new table')
     while True:
         generate_new_scene = main(pipeline)

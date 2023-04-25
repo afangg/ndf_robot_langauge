@@ -49,12 +49,10 @@ class Pipeline():
         self.random_pos = False
         self.ee_pose = None
 
-        self.table_model = None
         self.state = -1 #pick = 0, place = 1, teleport = 2
         self.table_obj = None #shelf = 0, rack = 1
         self.table_obj_link_id = 0
 
-        # self.cfg = get_eval_cfg_defaults()
         self.cfg = self.get_env_cfgs()
         self.meshes_dic = objects.load_meshes_dict(self.cfg)
 
@@ -416,7 +414,6 @@ class Pipeline():
         relevant_classes = concept_language.intersection(all_obj_classes)
         chunked_query = chunk_query(query)
         keywords = create_keyword_dic(relevant_classes, chunked_query)
-
         self.assign_classes(keywords)
         return concept_key, keywords
 
@@ -457,7 +454,6 @@ class Pipeline():
                     return
                 if len(keywords) == 2:
                     pair_1, pair_2 = keywords
-
                     if pair_1[2]:
                         classes_to_assign = [pair_1, pair_2]
                     elif pair_2[2]:
@@ -512,7 +508,7 @@ class Pipeline():
                 if len(pcd_tup) == 3:
                     score, pcd, _ = pcd_tup
                 else:
-                    score, pcd = pcd_= pcd_tup
+                    score, pcd = pcd_tup
                 if assigned_centroids.any():
                     diff = assigned_centroids-np.average(pcd, axis=0)
                     centroid_dists = np.sqrt(np.sum(diff**2,axis=-1))
@@ -525,8 +521,8 @@ class Pipeline():
                 trimesh_util.trimesh_show([self.ranked_objs[obj_rank]['pcd']])
 
         with self.meshcat.recorder.meshcat_scene_lock:
-            for _, obj in self.ranked_objs.items():
-                label = 'scene/%s_pcd' % obj['description']
+            for rank, obj in self.ranked_objs.items():
+                label = f'scene/initial_{rank}_pcd'
                 color = [random.randint(0,255), random.randint(0,255), random.randint(0,255)]
                 util.meshcat_pcd_show(self.meshcat.mc_vis, obj['pcd'], color=color, name=label)
 
@@ -637,7 +633,7 @@ class Pipeline():
                 if not cam_pcds:
                     continue
                 if obj_label not in label_to_pcds:
-                    label_to_pcds[obj_label], label_to_scores[obj_label] = cam_pcds, cam_scores[obj_label]
+                    label_to_pcds[obj_label], label_to_scores[obj_label] = cam_pcds, cam_scores
                 else:
                     new_pcds, new_lables = extend_pcds(cam_pcds, 
                                                        label_to_pcds[obj_label], 
@@ -960,7 +956,7 @@ class Pipeline():
         if self.state == 2:
             self.teleport(obj_id, ee_poses)
         else:
-            jnt_poses = self.get_iks(ee_poses)
+            jnt_poses = [self.cascade_ik(pose) for pose in ee_poses]
 
             prev_jnt_pos = self.robot.arm.get_jpos()
             # start_pcd = self.ranked_objs[0]['pcd']
@@ -1005,9 +1001,6 @@ class Pipeline():
             self.robot.arm.eetool.open()
             time.sleep(0.5)
 
-    def get_iks(self, ee_poses):
-        return [self.cascade_ik(pose) for pose in ee_poses]
-    
     def cascade_ik(self, ee_pose):
         jnt_pos = None
         if jnt_pos is None:

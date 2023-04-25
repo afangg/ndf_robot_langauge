@@ -97,7 +97,7 @@ if __name__ == "__main__":
     pipeline = Pipeline(args)
     pipeline.setup_client()
 
-    server = VizServer(pipeline.robot.pb_client)
+    server = VizServer(pipeline.robot.pb_client, port_vis=6000)
     pipeline.register_vizServer(server)
 
     pipeline.setup_table()
