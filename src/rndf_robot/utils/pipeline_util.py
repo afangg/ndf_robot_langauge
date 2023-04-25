@@ -97,7 +97,7 @@ def process_xq_rs_data(data, table_obj=None):
         return gt_place_demo_pts
 
 def process_demo_data(data, initial_pose=None, table_obj=None):
-    if not table_obj:
+    if table_obj is None:
         demo_info, initial_pose = grasp_demo(data)
     else:
         demo_info = place_demo(data, initial_pose, table_obj=table_obj)
@@ -136,11 +136,11 @@ def grasp_demo(data):
     return target_info, data['obj_pose_world']
 
 def place_demo(place_data, initial_pose, table_obj=None):
-    if not initial_pose and place_data['grasp_obj_pose_world'] is None:
-        return False
+    # if initial_pose is None and 'grasp_obj_pose_world' not in place_data:
+    #     return False
 
-    if not initial_pose:
-        initial_pose = place_data['grasp_obj_pose_world']
+    # if initial_pose is None:
+    #     initial_pose = place_data['grasp_obj_pose_world']
 
     if table_obj==0:
         print('Place on shelf')
@@ -163,17 +163,20 @@ def place_demo(place_data, initial_pose, table_obj=None):
     inliers = np.where(np.linalg.norm(place_demo_obj_pts - place_demo_pts_mean, 2, 1) < 0.2)[0]
     place_demo_obj_pts = place_demo_obj_pts[inliers]
     place_demo_obj_pcd = trimesh.PointCloud(place_demo_obj_pts)
-    pick_demo_obj_pose = initial_pose
+    # pick_demo_obj_pose = initial_pose
     # pick_demo_obj_pose = obj_pose
     place_demo_obj_pose = place_data['obj_pose_world']
-    place_demo_obj_pose_rel_mat = util.matrix_from_pose(
-        util.get_transform(
-            util.list2pose_stamped(place_demo_obj_pose), 
-            util.list2pose_stamped(pick_demo_obj_pose)))  # ground truth relative transformation in demo
+    place_demo_obj_pose_rel_mat = util.matrix_from_pose(util.list2pose_stamped(place_demo_obj_pose))
+    # place_demo_obj_pose_rel_mat = util.matrix_from_pose(
+    #     util.get_transform(
+    #         util.list2pose_stamped(place_demo_obj_pose), 
+    #         util.list2pose_stamped(pick_demo_obj_pose)))  # ground truth relative transformation in demo
     place_demo_obj_pcd.apply_transform(place_demo_obj_pose_rel_mat)  # start shape points transformed into goal configuration
     place_demo_obj_pts = np.asarray(place_demo_obj_pcd.vertices)  # shape points at goal
 
     place_demo_placement_pts_rs = place_data[place_pcd_gt]  # points used to represent the rack in canonical pose
+    if place_demo_placement_pts_rs.ndim > 2:
+        place_demo_placement_pts_rs = place_demo_placement_pts_rs[0]
     place_demo_placement_pcd_rs = trimesh.PointCloud(place_demo_placement_pts_rs)
     place_demo_placement_pose_mat = util.matrix_from_pose(util.list2pose_stamped(place_data[place_world]))
     place_demo_placement_pcd_rs.apply_transform(place_demo_placement_pose_mat)  # points used to represent the rack in demo pose

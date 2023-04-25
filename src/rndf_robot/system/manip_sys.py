@@ -11,7 +11,7 @@ generate_new_scene = True
 
 config = dict(
     # objects={'mug': {(1,0,0.1,1):1, (0,0.5,0.8,1):1}}
-    objects = {'container': {(1,0,0.1,1):1}, 'mug': {(0,1,0.1,1):1}}
+    objects = {'mug': {(0,1,0.1,1):1}, 'rack': {(0,0.5,0.8,1):1}}
 )
 def main(pipeline, generate_new_scene=True):
     # torch.manual_seed(args.seed)
@@ -32,10 +32,9 @@ def main(pipeline, generate_new_scene=True):
         log_warn('WARNING: Target object not detected, resetting the scene')
         pipeline.reset()
         return
-    ranks = [0] if pipeline.state == 0 else [0,1]
-    pipeline.assign_pcds(labels_to_pcds,ranks)
+    pipeline.assign_pcds(labels_to_pcds)
     
-    pipeline.get_intial_model_paths(concept)
+    pipeline.get_initial_model_paths(concept)
     pipeline.load_demos(concept)
     pipeline.load_models()
 
@@ -83,7 +82,7 @@ if __name__ == "__main__":
     parser.add_argument('--noise_idx', type=int, default=0)
 
     parser.add_argument('--pb_seg', action='store_true')
-
+    parser.add_argument('--table_type', type=str, default='default')
 
     args = parser.parse_args()
 

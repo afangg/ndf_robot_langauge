@@ -18,12 +18,10 @@ def main(pipeline):
         log_warn('WARNING: Target object not detected, resetting the scene')
         pipeline.reset()
         return
-    ranks = [0] if pipeline.state == 0 else [0,1]
-
-    pipeline.assign_pcds(labels_to_pcds,ranks)
+    pipeline.assign_pcds(labels_to_pcds)
     
     log_info(f'Demo name:{concept}')
-    pipeline.get_intial_model_paths(concept)
+    pipeline.get_initial_model_paths(concept)
     pipeline.load_demos(concept)
     pipeline.load_models()
 

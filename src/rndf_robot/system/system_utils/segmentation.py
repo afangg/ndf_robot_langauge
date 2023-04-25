@@ -242,7 +242,7 @@ def detect_bbs(image, classes, max_count=None, score_threshold=0.1):
                                           classes, 
                                           top=max_count, 
                                           score_threshold=score_threshold, 
-                                          show_seg=True)
+                                          show_seg=False)
     obj_to_region = {}
     for caption, boxes in captions_to_bbs.items():
         obj_to_region[caption] = [(list(int(i) for i in box)) for box in boxes]

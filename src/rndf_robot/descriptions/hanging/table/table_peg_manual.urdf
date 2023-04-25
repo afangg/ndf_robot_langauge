@@ -57,7 +57,7 @@
     <parent link="baseLink"/>
     <child link="peg"/>
     <!-- <origin rpy="0 0 3.1415" xyz="0.3 -0.1 1.0"/> -->
-    <origin rpy="0 0 3.1415" xyz="0.27 -0.09 0.9715"/> 
+    <origin rpy="0 0 3.1415" xyz="0.27 -0.09 1.001"/> 
   </joint>
   <link concave="yes" name="peg">
     <visual>

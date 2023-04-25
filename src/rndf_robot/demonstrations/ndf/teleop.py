@@ -367,6 +367,9 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
             pos = [np.random.random() * (x_high - x_low) + x_low, np.random.random() * (y_high - y_low) + y_low, table_z]
             if global_dict['fixed_angle']:
                 ori = upright_orientation
+            elif global_dict['upside_down']:
+                ori = upright_orientation
+                ori[0] = -ori[0]
             else:
                 pose = util.list2pose_stamped(pos + upright_orientation)
                 rand_yaw_T = util.rand_body_yaw_transform(pos, min_theta=-np.pi, max_theta=np.pi)
@@ -594,8 +597,11 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
                     print(pt[8])
                 rack_contact_pose[:3] = np.asarray(rack_closest_points[0][5])
 
-            if mc_vis is not None:
-                util.meshcat_pcd_show(mc_vis, rack_closest_points, color=(100, 100, 0), name='scene/rack_contact')
+            from IPython import embed
+            embed()
+
+            # if mc_vis is not None:
+            #     util.meshcat_pcd_show(mc_vis, rack_closest_points, color=(100, 100, 0), name='scene/rack_contact')
 
             place_save_path = osp.join(save_dir, 'place_demo_' + str(shapenet_id) + '.npz')
             cur_demo_iter = 0
@@ -608,14 +614,18 @@ def worker_robot(child_conn, work_queue, result_queue, global_dict, worker_flag_
             print('saving to: %s' % place_save_path)
             if grasp_obj_pose_world is None:
                 print("grasp_obj_pose_world IS NONE!")
+                
+            current_g2p_transform_list = util.pose_stamped2list(util.get_transform(
+                pose_frame_target=util.list2pose_stamped(obj_pose_world),
+                pose_frame_source=util.list2pose_stamped(grasp_obj_pose_world)
+            ))
 
             np.savez(
                 place_save_path,
                 shapenet_id=shapenet_id,
                 ee_pose_world=np.asarray(ee_pose_world),
                 robot_joints=np.asarray(robot_joints),
-                obj_pose_world=np.asarray(obj_pose_world),
-                grasp_obj_pose_world=grasp_obj_pose_world,
+                obj_pose_world=np.asarray(current_g2p_transform_list),
                 obj_pose_camera=obj_pose_camera_np,
                 object_pointcloud=pix_3d,
                 rgb=rgb_imgs,

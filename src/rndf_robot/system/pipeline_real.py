@@ -192,12 +192,13 @@ class Pipeline():
                 'world_img': pcd_world_img,
                 'cam_pose_mat': cam_pose_world
             }
+            util.meshcat_pcd_show(self.viz.mc_vis, pcd_world, color=(0, 255, 0), name=f'scene/scene_{idx}')
 
             pcd_pts.append(pcd_world)
             pcd_dict_list.append(pcd_dict)
-
+        embed()
         pcd_full = np.concatenate(pcd_pts, axis=0)
-        util.meshcat_pcd_show(self.viz.mc_vis, pcd_full, color=(0, 255, 0), name='scene/full_scene')
+        # util.meshcat_pcd_show(self.viz.mc_vis, pcd_full, color=(0, 255, 0), name='scene/full_scene')
 
         return pcd_full
 
@@ -461,11 +462,11 @@ class Pipeline():
     #################################################################################################
     # Misc?
 
-    def associate_ranked_objs(self, relevent_objs):
+    def associate_ranked_objs(self, relevant_objs):
         '''
-        @relevent_objs: {keywords: obj_class}
+        @relevant_objs: {keywords: obj_class}
         '''
-        for obj_rank, obj_class in relevent_objs.items():
+        for obj_rank, obj_class in relevant_objs.items():
             if obj_rank in self.ranked_objs: continue
             obj_class = self.obj_info[obj_id]['class']
             # class might not be enough - keywords are more helpful
@@ -478,7 +479,7 @@ class Pipeline():
                 log_warn('NO RELEVANT OBJECT IN THE SCENE. EXITING')
                 return
             
-        for keyword, obj_class in relevent_objs.items():
+        for keyword, obj_class in relevant_objs.items():
             # for obj_rank, obj in self.ranked_objs.items():
             #     if 'obj_id' in obj
             obj_class = self.obj_info[obj_id]['class']
@@ -564,7 +565,7 @@ class Pipeline():
             relation = 'Relational - class:%s, descr: %s'% (self.ranked_objs[1]['potential_class'], self.ranked_objs[1]['description'])
             log_debug(relation)
 
-    def assign_pcds(self, labels_to_pcds, obj_ranks=None):
+    def assign_pcds(self, labels_to_pcds):
         embed()
         assigned_centroids = []
         for obj_rank, obj in self.ranked_objs.items():
@@ -575,7 +576,7 @@ class Pipeline():
         for label in labels_to_pcds:
             labels_to_pcds[label].sort(key=lambda x: x[0])
 
-        for obj_rank in obj_ranks:
+        for obj_rank in self.ranked_objs:
             if 'pcd' in self.ranked_objs[obj_rank]: continue
             description = self.ranked_objs[obj_rank]['description']
             obj_class = self.ranked_objs[obj_rank]['potential_class']
@@ -623,7 +624,7 @@ class Pipeline():
         label_to_scores = {}
         centroid_thresh = 0.1
         detect_thresh = 0.12
-        # self.get_real_pcd()
+        self.get_real_pcd()
 
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
@@ -661,7 +662,7 @@ class Pipeline():
                 log_debug(f'{obj_label} size is now {len(label_to_pcds[obj_label])}')
             
         pcds_output = {}
-        embed()
+
         for obj_label in captions:
             if obj_label not in label_to_pcds:
                 log_warn('WARNING: COULD NOT FIND RELEVANT OBJ')
@@ -820,7 +821,7 @@ class Pipeline():
 
     #################################################################################################
     # Optimization 
-    def get_intial_model_paths(self, concept):
+    def get_initial_model_paths(self, concept):
         target_class = self.ranked_objs[0]['potential_class']
         target_model_path = self.args.child_model_path
         if not target_model_path:

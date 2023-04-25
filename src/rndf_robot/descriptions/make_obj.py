@@ -7,10 +7,10 @@ sys.path.append(os.environ['SOURCE_DIR'])
 
 from rndf_robot.utils import util
 
-box = trimesh.creation.box([0.2, 0.2, 0.04])
-cyl = trimesh.creation.cylinder(radius=0.025, height=0.3)
+box = trimesh.creation.box([0.15, 0.15, 0.03])
+cyl = trimesh.creation.cylinder(radius=0.025, height=0.25)
 cyl.apply_translation([0.0, 0.0, 0.15])
-box.apply_translation([0.0, 0.0, 0.002])
+box.apply_translation([0.0, 0.0, 0.03/2])
 
 full = trimesh.util.concatenate([box, cyl])
 

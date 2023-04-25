@@ -60,6 +60,7 @@ def main(args):
         print(f'There are multiple objects to load, just loading {have_list[0]}')
     manager.global_dict['have'] = have_list[0]
     manager.global_dict['fixed_angle'] = args.fixed_angle
+    manager.global_dict['upside_down'] = args.upside_down
 
     if osp.exists(osp.join(save_dir, 'demo_skipped_ids.npz')):
         skipped_ids = np.load(osp.join(save_dir, 'demo_skipped_ids.npz'))['ids'].tolist()
@@ -130,6 +131,7 @@ if __name__ == "__main__":
     parser.add_argument('--shapenet_id', type=str, default='none')
     parser.add_argument('--single_instance', action='store_true')
     parser.add_argument('--fixed_angle', action='store_true')
+    parser.add_argument('--upside_down', action='store_true')
     parser.add_argument('--with_rack', action='store_true')
     parser.add_argument('--with_shelf', action='store_true')
     parser.add_argument('--with_peg', action='store_true')

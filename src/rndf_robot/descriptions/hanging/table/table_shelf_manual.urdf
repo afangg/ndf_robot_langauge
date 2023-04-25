@@ -62,14 +62,14 @@
     <visual>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="simple_back.obj" scale="0.75 0.75 0.5"/>
+        <mesh filename="shelf_back.obj" scale="0.75 0.75 0.5"/>
       </geometry>
       <material name="Ivory"/>
     </visual>
     <collision>
       <origin rpy="0 0 0" xyz="0 0 0"/>
       <geometry>
-        <mesh filename="simple_back.obj" scale="0.75 0.75 0.5"/>
+        <mesh filename="shelf_back.obj" scale="0.75 0.75 0.5"/>
       </geometry>
     </collision>
     <contact>

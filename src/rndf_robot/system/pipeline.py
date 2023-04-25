@@ -29,7 +29,7 @@ from rndf_robot.utils.pipeline_util import (
     constraint_obj_world,
 )
 from rndf_robot.utils.rndf_utils import infer_relation_intersection, create_target_descriptors
-from system_utils.segmentation import detect_bbs, get_label_pcds, extend_pcds
+from system_utils.segmentation import detect_bbs, filter_pcds, extend_pcds, filter_regions
 from system_utils.language import query_correspondance, chunk_query, create_keyword_dic
 from system_utils.demos import all_demos, get_concept_demos, create_target_desc_subdir, get_model_paths
 import system_utils.objects as objects
@@ -38,12 +38,12 @@ from airobot import Robot, log_info, set_log_level, log_warn, log_debug
 from airobot.utils import common
 
 from IPython import embed;
+ee_file = osp.join(path_util.get_rndf_descriptions(), 'franka_panda/meshes/panda_hand_full.obj')
 
 class Pipeline():
 
     def __init__(self, args):
         log_debug('Pipeline initialized')
-        self.tables = ['table_rack.urdf', 'table_shelf.urdf']
         self.args = args
 
         self.random_pos = False
@@ -51,7 +51,8 @@ class Pipeline():
 
         self.table_model = None
         self.state = -1 #pick = 0, place = 1, teleport = 2
-        self.table_obj = -1 #shelf = 0, rack = 1
+        self.table_obj = None #shelf = 0, rack = 1
+        self.table_obj_link_id = 0
 
         # self.cfg = get_eval_cfg_defaults()
         self.cfg = self.get_env_cfgs()
@@ -78,7 +79,9 @@ class Pipeline():
             self.last_ee = None
             self.obj_info = {}
             self.class_to_id = {}
+            self.meshcat.mc_vis['scene'].delete()
 
+        self.meshcat.mc_vis['optimizer'].delete()
         self.ranked_objs = {}
         self.robot.arm.go_home(ignore_physics=True)
         self.robot.arm.move_ee_xyz([0, 0, 0.2])
@@ -86,8 +89,8 @@ class Pipeline():
         self.state = -1
         time.sleep(1.5)
 
-    def register_vizServer(self, vizServer):
-        self.viz = vizServer
+    def register_vizServer(self, visServer):
+        self.meshcat = visServer
 
     def step(self, last_ee=None):
         while True:
@@ -136,24 +139,22 @@ class Pipeline():
 
     def setup_table(self):            
         table_fname = osp.join(path_util.get_rndf_descriptions(), 'hanging/table')
-        table_urdf_file = 'table_manual.urdf'
-        if self.table_model:    
-            if self.cfg.PLACEMENT_SURFACE == 'shelf':
-                self.table_obj = 0
-                table_urdf_file = 'table_shelf.urdf'
-                log_debug('Shelf loaded')
-            else:
-                log_debug('Rack loaded')
-                self.table_obj = 1
-                table_urdf_file = 'table_rack.urdf'
+        table_urdfs = {'default': 'table_manual.urdf', 'rack': 'table_rack_manual.urdf', 'shelf': 'table_shelf_manual.urdf', 'peg': 'table_peg_manual.urdf'}
+        table_type = self.args.table_type
+        table_urdf_file = table_urdfs[table_type]
+        if table_type == 'shelf':
+            self.table_obj = 0
+        elif table_type == 'rack' or table_type == 'peg':
+            self.table_obj = 1
         table_fname = osp.join(table_fname, table_urdf_file)
 
         self.table_id = self.robot.pb_client.load_urdf(table_fname,
                                 self.cfg.TABLE_POS, 
                                 self.cfg.TABLE_ORI,
                                 scaling=1.0)
-        self.viz.recorder.register_object(self.table_id, table_fname)
-        self.viz.pause_mc_thread(False)
+        if table_type != 'manual':
+            self.table_obj_link_id = 0
+            place_color = p.getVisualShapeData(self.table_id)[0][7]
         safeCollisionFilterPair(self.robot.arm.robot_id, self.table_id, -1, -1, enableCollision=True)
 
         time.sleep(3.0)
@@ -263,8 +264,8 @@ class Pipeline():
         self.ik_helper.add_collision_bodies({obj_id: obj_id})
 
         # register the object with the meshcat visualizer
-        self.viz.recorder.register_object(obj_id, obj_file_dec, scaling=mesh_scale)
-        safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
+        self.meshcat.recorder.register_object(obj_id, obj_file_dec, scaling=mesh_scale)
+        # safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
 
         p.changeDynamics(obj_id, -1, lateralFriction=0.5, linearDamping=5, angularDamping=5)
 
@@ -279,9 +280,9 @@ class Pipeline():
 
         obj_pose_world_list = p.getBasePositionAndOrientation(obj_id)
         obj_pose_world = util.list2pose_stamped(list(obj_pose_world_list[0]) + list(obj_pose_world_list[1]))
-        # with self.viz.recorder.meshcat_scene_lock:
+        # with self.meshcat.recorder.meshcat_scene_lock:
         #     pose = util.matrix_from_pose(obj_pose_world)
-        #     util.meshcat_obj_show(self.viz.mc_vis, obj_file_dec, pose, mesh_scale, name='scene/%s'%obj_class)
+        #     util.meshcat_obj_show(self.meshcat.mc_vis, obj_file_dec, pose, mesh_scale, name='scene/%s'%obj_class)
         # self.ik_helper.register_object(obj_file_dec, pos, ori, mesh_scale, name=obj_id)
         return obj_id, obj_pose_world, o_cid
 
@@ -303,20 +304,6 @@ class Pipeline():
             log_info('Config file %s does not exist, using defaults' % config_fname)
         cfg.freeze()
         return cfg
-
-    # def get_obj_cfgs(self):
-    #     # object specific configs
-    #     obj_cfg = get_obj_cfg_defaults()
-    #     config = 'base_config' if len(self.test_objs) != 1 else self.test_objs[0]
-    #     obj_config_name = osp.join(path_util.get_rndf_config(), config+'_obj_cfg.yaml')
-    #     if osp.exists(obj_config_name):
-    #         obj_cfg.merge_from_file(obj_config_name)
-    #         log_debug("Set up config settings for %s" % self.test_obj)
-    #     else:
-    #         log_warn(f'Config file {obj_config_name} does not exist, using defaults')
-    #     # obj_cfg.freeze()
-    #     return obj_cfg
-        
     #################################################################################################
     # Language
     
@@ -330,6 +317,8 @@ class Pipeline():
         log_debug('All demo labels: %s' %all_demos.keys())
         while True:
             query = self.ask_query()
+            # query = "place mug_on the shelf", "put the mug on the shelf"
+
             if not query: return
             corresponding_concept, query_text = query
             demos = get_concept_demos(corresponding_concept)
@@ -374,57 +363,14 @@ class Pipeline():
             
             if corresponding_concept:
                 break
-
-        # if demos is not None and self.table_model is None:
-        #     demo_file = np.load(demos[0], allow_pickle=True)
-        #     if 'table_urdf' in demo_file:
-        #         self.table_model = demo_file['table_urdf'].item()
         return corresponding_concept, query_text
 
     #################################################################################################
-    # Set up scene
-
-    # def setup_scene_objs(self):
-    #     ranked_objs = []
-    #     ranked_objs = list(self.ranked_objs.keys())
-    #     log_warn('Setting up new objects %s'% ranked_objs)
-
-    #     ids = []
-    #     for obj_key in ranked_objs:
-    #         self.ranked_objs[obj_key]['shapenet_id'] = random.sample(self.obj_meshes[self.scene_dict[obj_key]['class']], 1)[0]
-    #         log_debug('Loading %s shape: %s' % (obj_key, self.scene_dict[obj_key]['shapenet_id']))
-
-    #         obj_class = self.scene_dict[obj_key]['class']
-    #         self.scene_dict[obj_key]['file_path'] = objects.choose_obj(obj_class) 
-    #         self.scene_dict[obj_key]['scale_default'] = objects.scale_default[obj_class] 
-
-    #     if self.scene_dict['child']['class'] == 'bottle' and 'parent' in self.scene_dict:
-    #         if self.scene_dict['parent']['class'] == 'container':
-    #             parent_extents, child_extents = self.get_extents('parent'), self.get_extents('child')
-    #             # IF THE BOTTLE ISN'T SMALL ENOUGH THAN THE BOX IT WON'T FIT SO SCALE THE BOX UP
-    #             if np.max(child_extents) > (0.75 * np.min(parent_extents[:-1])):
-    #                 # scale up the container size so that the bottle is more likely to fit inside
-    #                 new_parent_scale = np.max(child_extents) * (np.random.random() * (2 - 1.5) + 1.5) / np.min(parent_extents[:-1])
-    #                 self.scene_dict['parent']['scale_default'] = new_parent_scale
-    #                 ext_str = f'\Parent extents: {", ".join([str(val) for val in parent_extents])}, \Child extents: {", ".join([str(val) for val in child_extents])}\n'
-    #                 log_info(ext_str)
-        
-    #     for obj_key in obj_keys:
-    #         obj_id, obj_pose_world, o_cid = self.add_test_objs(obj_key)
-    #         self.scene_dict[obj_key]['obj_id'] = obj_id
-    #         self.scene_dict[obj_key]['pose'] = obj_pose_world
-    #         self.scene_dict[obj_key]['o_cid'] = o_cid
-    #         ids.append(obj_id)
-        
-    #     # if 'parent' in self.scene_dict:
-    #     #     safeCollisionFilterPair(self.scene_dict['parent']['obj_id'], self.scene_dict['child']['obj_id'], -1, -1, enableCollision=True)
-    #     return ids
-
-    def associate_ranked_objs(self, relevent_objs):
+    def associate_ranked_objs(self, relevant_objs):
         '''
-        @relevent_objs: {keywords: obj_class}
+        @relevant_objs: {keywords: obj_class}
         '''
-        for obj_rank, obj_class in relevent_objs.items():
+        for obj_rank, obj_class in relevant_objs.items():
             if obj_rank in self.ranked_objs: continue
             obj_class = self.obj_info[obj_id]['class']
             # class might not be enough - keywords are more helpful
@@ -437,7 +383,7 @@ class Pipeline():
                 log_warn('NO RELEVANT OBJECT IN THE SCENE. EXITING')
                 return
             
-        for keyword, obj_class in relevent_objs.items():
+        for keyword, obj_class in relevant_objs.items():
             # for obj_rank, obj in self.ranked_objs.items():
             #     if 'obj_id' in obj
             obj_class = self.obj_info[obj_id]['class']
@@ -465,11 +411,12 @@ class Pipeline():
         returns: the key for the set of demos relating to the concept (just the {concept} part)
         '''
         all_obj_classes = set(objects.mesh_data_dirs.keys())
-        concept_key = corresponding_concept.split(' ')[-1]
+        concept_key = corresponding_concept[corresponding_concept.find(' ')+1:]
         concept_language = frozenset(concept_key.lower().replace('_', ' ').split(' '))
         relevant_classes = concept_language.intersection(all_obj_classes)
         chunked_query = chunk_query(query)
         keywords = create_keyword_dic(relevant_classes, chunked_query)
+
         self.assign_classes(keywords)
         return concept_key, keywords
 
@@ -487,34 +434,42 @@ class Pipeline():
             self.ranked_objs[0]['description'] = keyword[1]
             self.ranked_objs[0]['potential_class'] = keyword[0]
         else:
-            if len(keywords) > 1 and self.state == 1:
-                for pair in keywords:
-                    # check if the obj class mentioned in noun phrase same as object to be moved
-                    if pair[0] == self.ranked_objs[0]['potential_class']:
-                        keywords.remove(pair)                
-            if len(keywords) == 1:
-                priority_rank = 0 if 0 not in self.ranked_objs else 1
-                keyword = keywords.pop()
-                self.ranked_objs[priority_rank] = {}
-                self.ranked_objs[priority_rank]['description'] = keyword[1]
-                self.ranked_objs[priority_rank]['potential_class'] = keyword[0]
+            if self.state == 1:
+                if len(keywords) >= 1:
+                    for pair in keywords:
+                        # check if the obj class mentioned in noun phrase same as object to be moved
+                        if pair[0] == self.ranked_objs[0]['potential_class']:
+                            keywords.remove(pair)   
+                if len(keywords) == 0:
+                    return
+                else:
+                    if len(keywords) > 1:
+                        log_warn('There is more than one noun mentioned in the query, just choosing one')
+
+                    priority_rank = 0 if 0 not in self.ranked_objs else 1
+                    keyword = keywords.pop()
+                    self.ranked_objs[priority_rank] = {}
+                    self.ranked_objs[priority_rank]['description'] = keyword[1]
+                    self.ranked_objs[priority_rank]['potential_class'] = keyword[0]
             else:
                 if self.state != 2 and len(keywords) > 1:
                     log_warn('There is more than one noun mentioned in the query and unsure what to do')
-                    # return
-                pair_1, pair_2 = keywords
+                    return
+                if len(keywords) == 2:
+                    pair_1, pair_2 = keywords
 
-                if pair_1[2]:
-                    pairs = [pair_1, pair_2]
-                elif pair_2[2]:
-                    pairs = [pair_2, pair_1]
+                    if pair_1[2]:
+                        classes_to_assign = [pair_1, pair_2]
+                    elif pair_2[2]:
+                        classes_to_assign = [pair_2, pair_1]
+                    else:
+                        log_warn("Unsure which object to act on")
                 else:
-                    log_warn("Unsure which object to act on")
-
-                for i in range(2):
+                    classes_to_assign = keywords
+                for i in range(len(classes_to_assign)):
                     self.ranked_objs[i] = {}
-                    self.ranked_objs[i]['description'] = pairs[i][1]
-                    self.ranked_objs[i]['potential_class'] = pairs[i][0]
+                    self.ranked_objs[i]['description'] = classes_to_assign[i][1]
+                    self.ranked_objs[i]['potential_class'] = classes_to_assign[i][0]
 
         target = 'Target - class:%s, descr: %s'% (self.ranked_objs[0]['potential_class'], self.ranked_objs[0]['description'])
         log_debug(target)
@@ -522,7 +477,7 @@ class Pipeline():
             relation = 'Relational - class:%s, descr: %s'% (self.ranked_objs[1]['potential_class'], self.ranked_objs[1]['description'])
             log_debug(relation)
 
-    def assign_pcds(self, labels_to_pcds, obj_ranks=None):
+    def assign_pcds(self, labels_to_pcds):
         assigned_centroids = []
         for obj_rank, obj in self.ranked_objs.items():
             if 'pcd' in obj:
@@ -532,7 +487,7 @@ class Pipeline():
         for label in labels_to_pcds:
             labels_to_pcds[label].sort(key=lambda x: x[0])
 
-        for obj_rank in obj_ranks:
+        for obj_rank in self.ranked_objs:
             if 'pcd' in self.ranked_objs[obj_rank]: continue
             description = self.ranked_objs[obj_rank]['description']
             obj_class = self.ranked_objs[obj_rank]['potential_class']
@@ -569,11 +524,11 @@ class Pipeline():
                 log_debug(f'Best score was {score}')
                 trimesh_util.trimesh_show([self.ranked_objs[obj_rank]['pcd']])
 
-        with self.viz.recorder.meshcat_scene_lock:
+        with self.meshcat.recorder.meshcat_scene_lock:
             for _, obj in self.ranked_objs.items():
                 label = 'scene/%s_pcd' % obj['description']
                 color = [random.randint(0,255), random.randint(0,255), random.randint(0,255)]
-                util.meshcat_pcd_show(self.viz.mc_vis, obj['pcd'], color=color, name=label)
+                util.meshcat_pcd_show(self.meshcat.mc_vis, obj['pcd'], color=color, name=label)
 
 
     def segment_scene_pb(self, obj_ids=None):
@@ -586,6 +541,9 @@ class Pipeline():
         for obj_id in obj_ids:
             pc_obs_info['pcd_pts'][obj_id] = []
 
+        all_table_pts = []
+        all_table_obj_pts = []
+
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
             rgb, depth, pyb_seg = cam.get_images(get_rgb=True, get_depth=True, get_seg=True)
@@ -597,8 +555,25 @@ class Pipeline():
             for obj_id in obj_ids:
                 obj_inds = np.where(flat_seg == obj_id)                
                 obj_pts = pts_raw[obj_inds[0], :]
-                pc_obs_info['pcd_pts'][obj_id].append(util.crop_pcd(obj_pts))
+                # pc_obs_info['pcd_pts'][obj_id].append(util.crop_pcd(obj_pts))
+                pc_obs_info['pcd_pts'][obj_id].append(obj_pts)
+            
+            table_inds = np.where(flat_seg == self.table_id)                
+            table_pts = pts_raw[table_inds[0], :]
+            all_table_pts.append(table_pts)
         
+            table_obj_val = self.table_id + ((self.table_obj_link_id+1) << 24)
+            table_obj_inds = np.where(flat_seg == table_obj_val)
+            table_obj_pts = pts_raw[table_obj_inds[0], :]
+            all_table_obj_pts.append(table_obj_pts)
+
+        table_pcd = np.concatenate(all_table_pts, axis=0)  # object shape point cloud
+        util.meshcat_pcd_show(self.meshcat.mc_vis, table_pcd, color=(0,0,255), name='scene/table_pcd')
+
+        if table_obj_pts.any():
+            table_obj_pts = np.concatenate(all_table_pts, axis=0)  # object shape point cloud
+            util.meshcat_pcd_show(self.meshcat.mc_vis, table_obj_pts, color=(0,255,0), name='scene/table_obj_pcd')
+
         pcds_output = {}
         for obj_id, obj_pcd_pts in pc_obs_info['pcd_pts'].items():
             if not obj_pcd_pts:
@@ -615,11 +590,11 @@ class Pipeline():
                 pcds_output[obj_class] = []
             pcds_output[obj_class].append((1.0, target_obj_pcd_obs, obj_id))
 
-        with self.viz.recorder.meshcat_scene_lock:
+        with self.meshcat.recorder.meshcat_scene_lock:
             for obj_id, obj in self.obj_info.items():
                 label = 'scene/%s_pcd' % obj_id
                 color = [random.randint(0,255), random.randint(0,255), random.randint(0,255)]
-                util.meshcat_pcd_show(self.viz.mc_vis, obj['pcd'], color=color, name=label)
+                util.meshcat_pcd_show(self.meshcat.mc_vis, obj['pcd'], color=color, name=label)
         return pcds_output
         
 
@@ -640,23 +615,36 @@ class Pipeline():
         detect_thresh = 0.05
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
-            rgb, depth, pyb_seg = cam.get_images(get_rgb=True, get_depth=True, get_seg=True)
+            rgb, depth, _ = cam.get_images(get_rgb=True, get_depth=True, get_seg=True)
             pts_raw, _ = cam.get_pcd(in_world=True, rgb_image=rgb, depth_image=depth, depth_min=0.0, depth_max=np.inf)
-
             height, width, _ = rgb.shape
             pts_2d = pts_raw.reshape((height, width, 3))
-            obj_bbs, cam_scores = detect_bbs(rgb, captions, score_threshold=detect_thresh)
-            log_debug(f'Detected the following captions {obj_bbs.keys()}')
-            # embed()
-            for obj_label, regions in obj_bbs.items():
-                log_debug(f'Region count for {obj_label}: {len(regions)}')
 
-                cam_pcds = get_label_pcds(regions, pts_2d)
+            all_obj_bbs, all_obj_bb_scores = detect_bbs(rgb, 
+                                                        captions, 
+                                                        max_count=1, 
+                                                        score_threshold=detect_thresh)
+            log_debug(f'Detected the following captions {all_obj_bb_scores.keys()}')
+
+            for obj_label, obj_bbs in all_obj_bbs.items():
+                log_debug(f'Region count for {obj_label}: {len(obj_bbs)}')
+                obj_bbs, obj_bb_scores = filter_regions(pts_2d, depth, obj_bbs, all_obj_bb_scores[obj_label])
+                log_debug(f'{obj_label} after filtering is now {len(obj_bbs)}')
+                for j in range(len(obj_bbs)):
+                    util.meshcat_pcd_show(self.meshcat.mc_vis, obj_bbs[j], color=(0, 255, 0), name=f'scene/cam_{i}_{obj_label}_region_{j}')
+
+                cam_pcds, cam_scores = filter_pcds(obj_bbs, obj_bb_scores)
+                if not cam_pcds:
+                    continue
                 if obj_label not in label_to_pcds:
                     label_to_pcds[obj_label], label_to_scores[obj_label] = cam_pcds, cam_scores[obj_label]
                 else:
-                    label_to_pcds[obj_label], label_to_scores[obj_label] = extend_pcds(cam_pcds, label_to_pcds[obj_label], 
-                                                                                       cam_scores[obj_label], label_to_scores[obj_label], threshold=centroid_thresh-0.01*i)
+                    new_pcds, new_lables = extend_pcds(cam_pcds, 
+                                                       label_to_pcds[obj_label], 
+                                                       cam_scores, 
+                                                       label_to_scores[obj_label], 
+                                                       threshold=centroid_thresh)
+                    label_to_pcds[obj_label], label_to_scores[obj_label] = new_pcds, new_lables
                 log_debug(f'{obj_label} size is now {len(label_to_pcds[obj_label])}')
             
         pcds_output = {}
@@ -667,16 +655,16 @@ class Pipeline():
                 break
             obj_pcd_sets = label_to_pcds[obj_label]
             for i, target_obj_pcd_obs in enumerate(obj_pcd_sets):
-                target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
-                inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
-                target_obj_pcd_obs = target_obj_pcd_obs[inliers]
-                if not target_obj_pcd_obs: continue
+                # target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
+                # inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
+                # target_obj_pcd_obs = target_obj_pcd_obs[inliers]
+                # if not target_obj_pcd_obs.any(): continue
                 score = np.average(label_to_scores[obj_label][i])
                 if obj_label not in pcds_output:
                     pcds_output[obj_label] = []
                 pcds_output[obj_label].append((score, target_obj_pcd_obs))
-                # if self.args.debug:
-                #     trimesh_util.trimesh_show([target_obj_pcd_obs])
+                if self.args.debug:
+                    trimesh_util.trimesh_show([target_obj_pcd_obs])
         return pcds_output
 
     #################################################################################################
@@ -694,23 +682,23 @@ class Pipeline():
         self.ranked_objs[0]['demo_ids'] = []
         # don't re-init from pick to place? might not matter for relational descriptors because it saves it
         if self.state == 0:
-            self.ranked_objs[0]['demo_start_poses'] = []
+            self.ranked_objs[0]['demo_start_poses'] = {}
 
         for fname in self.skill_demos[:min(n, len(self.skill_demos))]:
             demo = np.load(fname, allow_pickle=True)
-            if 'shapenet_id' not in demo:
-                continue
-            obj_id = demo['shapenet_id'].item()
+            if 'shapenet_id' in demo:
+                obj_id = demo['shapenet_id'].item()
 
             if self.state == 0:
                 target_info, initial_pose = process_demo_data(demo, initial_pose = None, table_obj=None)
-                self.ranked_objs[0]['demo_start_poses'].append(initial_pose)
+                self.ranked_objs[0]['demo_start_poses'][obj_id]  = initial_pose
             else:
-                grasp_pose = self.ranked_objs[0]['demo_start_poses'].get(obj_id, None)
+                # grasp_pose = self.ranked_objs[0]['demo_start_poses'].get(obj_id, None)
+                grasp_pose = None
+                # grasp_pose = util.pose_stamped2list(util.unit_pose())
                 target_info, _ = process_demo_data(demo, grasp_pose, table_obj=self.table_obj)
                 if not target_info: continue
 
-            
             if target_info is not None:
                 self.ranked_objs[0]['demo_info'].append(target_info)
                 self.ranked_objs[0]['demo_ids'].append(obj_id)
@@ -811,18 +799,18 @@ class Pipeline():
             target_rounds=self.args.target_rounds, pc_reference=self.args.pc_reference,
             skip_alignment=self.args.skip_alignment, n_demos=n_demos, manual_target_idx=self.args.target_idx, 
             add_noise=self.args.add_noise, interaction_pt_noise_std=self.args.noise_idx,
-            use_keypoint_offset=use_keypoint_offset, keypoint_offset_params=keypoint_offset_params, visualize=True, mc_vis=self.viz.mc_vis)
+            use_keypoint_offset=use_keypoint_offset, keypoint_offset_params=keypoint_offset_params, visualize=True, mc_vis=self.meshcat.mc_vis)
        
 
     #################################################################################################
     # Optimization 
-    def get_intial_model_paths(self, concept):
+    def get_initial_model_paths(self, concept):
         target_class = self.ranked_objs[0]['potential_class']
         target_model_path = self.args.child_model_path
         if not target_model_path:
             target_model_path = 'ndf_vnn/rndf_weights/ndf_'+target_class+'.pth'
 
-        if self.state > 0:
+        if 1 in self.ranked_objs:
             relational_class = self.ranked_objs[1]['potential_class']
             relational_model_path = self.args.parent_model_path
             if not relational_model_path:
@@ -862,16 +850,17 @@ class Pipeline():
             query_pts_real_shape=query_pts_rs,
             opt_iterations=self.args.opt_iterations,
             cfg=self.cfg.OPTIMIZER)
-        optimizer.setup_meshcat(self.viz.mc_vis)
+        optimizer.setup_meshcat(self.meshcat.mc_vis)
         self.ranked_objs[obj_rank]['optimizer'] = optimizer
 
     def find_correspondence(self):
+        relational_rank = 1 if 1 in self.ranked_objs else 0
         if self.state == 0:
             ee_poses = self.find_pick_transform(0)
         elif self.state == 1:
-            ee_poses = self.find_place_transform(0, relational_rank=1, ee=self.last_ee)
+            ee_poses = self.find_place_transform(0, relational_rank=relational_rank, ee=self.last_ee)
         elif self.state == 2:
-            ee_poses = self.find_place_transform(0, relational_rank=1)
+            ee_poses = self.find_place_transform(0, relational_rank=relational_rank)
         return ee_poses
 
     def find_pick_transform(self, target_rank):
@@ -892,6 +881,12 @@ class Pipeline():
 
         ee_poses.append(pre_pre_ee_pose)
         ee_poses.append(pre_ee_pose)
+
+        for i, ee_pose in enumerate(ee_poses):
+            pose = util.body_world_yaw(util.list2pose_stamped(ee_pose), theta=-1.5708)
+            pose = util.matrix_from_pose(pose)
+
+            util.meshcat_obj_show(self.meshcat.mc_vis, ee_file, pose, 1.0, name=f'scene/ee_{i}')
         return ee_poses
     
     def find_place_transform(self, target_rank, relational_rank=None, ee=False):
@@ -907,14 +902,15 @@ class Pipeline():
             relational_target_desc, target_desc = self.ranked_objs[relational_rank]['target_desc'], self.ranked_objs[target_rank]['target_desc']
             relational_query_pts, target_query_pcd = self.ranked_objs[relational_rank]['query_pts'], self.ranked_objs[target_rank]['query_pts']
 
-            self.viz.pause_mc_thread(True)
+            self.meshcat.pause_mc_thread(True)
             final_pose_mat = infer_relation_intersection(
-                self.viz.mc_vis, relational_optimizer, optimizer, 
+                self.meshcat.mc_vis, relational_optimizer, optimizer, 
                 relational_target_desc, target_desc, 
                 relational_pcd, target_pcd, relational_query_pts, target_query_pcd, opt_visualize=self.args.opt_visualize)
-            self.viz.pause_mc_thread(False)
+            self.meshcat.pause_mc_thread(False)
         else:
-            pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=False)
+            optimizer.set_demo_info(self.ranked_objs[target_rank]['demo_info'])
+            pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=False, visualize=self.args.opt_visualize)
             final_pose_mat = pose_mats[best_idx]
         final_pose = util.pose_from_matrix(final_pose_mat)
 
@@ -939,6 +935,13 @@ class Pipeline():
             ee_poses.append(util.pose_stamped2list(ee_end_pose))
         else:
             ee_poses.append(util.pose_stamped2list(final_pose))
+        embed() 
+        for i, ee_pose in enumerate(ee_poses):
+            pose = util.body_world_yaw(util.list2pose_stamped(ee_pose), theta=-1.5708)
+            pose = util.matrix_from_pose(pose)
+
+            util.meshcat_obj_show(self.meshcat.mc_vis, ee_file, pose, 1.0, name=f'scene/ee_{i}')
+
         return ee_poses
 
     #########################################################################################################
@@ -959,26 +962,41 @@ class Pipeline():
         else:
             jnt_poses = self.get_iks(ee_poses)
 
-            prev_pos = self.robot.arm.get_jpos()
+            prev_jnt_pos = self.robot.arm.get_jpos()
+            # start_pcd = self.ranked_objs[0]['pcd']
+            # ee_pose = util.list2pose_stamped(np.concatenate(self.robot.arm.get_ee_pose()[:2]).tolist())
+            # ee_pose_matrix = util.matrix_from_pose(ee_pose)
+
+            # pcd_to_ee = util.get_transform(ee_pose, self.obj_info[obj_id]['pose'])
+            # current_pcd = util.transform_pcd(start_pcd, util.matrix_from_pose(pcd_to_ee))
+            # util.meshcat_pcd_show(self.meshcat.mc_vis, current_pcd, color=[255, 0, 255], name=f'scene/{obj_id}_pcd_start')
             for i, jnt_pos in enumerate(jnt_poses):
+                # prev_pos_world = ee_poses[i]
+                # transform = util.matrix_from_pose(util.list2pose_stamped(prev_pos_world))
+                # final_pose_mat = np.matmul(transform, ee_pose_matrix)
+                # current_pcd = util.transform_pcd(start_pcd, final_pose_mat)
+                # util.meshcat_pcd_show(self.meshcat.mc_vis, current_pcd, color=[255, 0, 255], name=f'scene/{obj_id}_pcd_{i}')
+                # self.robot.arm.set_ee_pose(prev_pos_world[:3], prev_pos_world[3:])
+
                 if jnt_pos is None:
                     log_warn('No IK for jnt', i)
                     break
                 
-                plan = self.plan_motion(prev_pos, jnt_pos)
+                plan = self.plan_motion(prev_jnt_pos, jnt_pos)
                 if plan is None:
                     log_warn('FAILED TO FIND A PLAN. STOPPING')
                     break
                 self.move_robot(plan)
-                prev_pos = jnt_pos
-                # input('Press enter to continue')
+                prev_jnt_pos = jnt_pos
+                input('Press enter to continue')
         if obj_id:
             self.post_execution(obj_id)
             time.sleep(1.0)
 
     def pre_execution(self, obj_id):
-        if self.state == 0:
-            if obj_id:
+        if obj_id:
+            safeCollisionFilterPair(bodyUniqueIdA=obj_id, bodyUniqueIdB=self.table_id, linkIndexA=-1, linkIndexB=self.table_obj_link_id, enableCollision=True)
+            if self.state == 0:
                 time.sleep(0.5)
                 # turn OFF collisions between robot and object / table, and move to pre-grasp pose
                 for i in range(p.getNumJoints(self.robot.arm.robot_id)):
@@ -986,18 +1004,6 @@ class Pipeline():
                     safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=obj_id, linkIndexA=i, linkIndexB=-1, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
             self.robot.arm.eetool.open()
             time.sleep(0.5)
-        else:
-            # all_ids = []
-            # for _, obj_ids in self.all_scene_objs.items():
-            #     all_ids.extend(obj_ids)
-            
-            # for obj in all_ids:
-            #     for other_obj in all_ids:
-            #         if obj != other_obj:
-            #             print(obj['obj_id'], other_obj['obj_id'])
-            #             safeCollisionFilterPair(obj['obj_id'], other_obj['obj_id'], -1, -1, enableCollision=True)
-            if obj_id:
-                safeCollisionFilterPair(self.ranked_objs[1]['obj_id'], self.ranked_objs[0]['obj_id'], -1, -1, enableCollision=True)
 
     def get_iks(self, ee_poses):
         return [self.cascade_ik(pose) for pose in ee_poses]
@@ -1005,7 +1011,7 @@ class Pipeline():
     def cascade_ik(self, ee_pose):
         jnt_pos = None
         if jnt_pos is None:
-            jnt_pos = self.ik_helper.get_feasible_ik(ee_pose, verbose=False)
+            jnt_pos = self.ik_helper.get_feasible_ik(ee_pose, verbose=True)
             if jnt_pos is None:
                 jnt_pos = self.ik_helper.get_ik(ee_pose)
                 if jnt_pos is None:
@@ -1015,7 +1021,6 @@ class Pipeline():
         return jnt_pos
 
     def teleport(self, obj_id, relative_pose):
-        embed()
         transform = util.matrix_from_pose(util.list2pose_stamped(relative_pose[0]))
         start_pose = np.concatenate(self.robot.pb_client.get_body_state(obj_id)[:2]).tolist()
         start_pose_mat = util.matrix_from_pose(util.list2pose_stamped(start_pose))
@@ -1023,15 +1028,15 @@ class Pipeline():
         self.robot.pb_client.set_step_sim(True)
         final_pose_list = util.pose_stamped2list(util.pose_from_matrix(final_pose_mat))
         final_pos, final_ori = final_pose_list[:3], final_pose_list[3:]
+        time.sleep(1.0)
 
         self.robot.pb_client.reset_body(obj_id, final_pos, final_ori)
 
         final_pcd = util.transform_pcd(self.obj_info[obj_id]['pcd'], transform)
-        with self.viz.recorder.meshcat_scene_lock:
-            util.meshcat_pcd_show(self.viz.mc_vis, final_pcd, color=[255, 0, 255], name=f'scene/{obj_id}_pcd')
+        with self.meshcat.recorder.meshcat_scene_lock:
+            util.meshcat_pcd_show(self.meshcat.mc_vis, final_pcd, color=[255, 0, 255], name=f'scene/{obj_id}_pcd')
+        time.sleep(3.0)
 
-        safeCollisionFilterPair(obj_id, self.table_id, -1, 0, enableCollision=False)
-        time.sleep(5.0)
         # turn on the physics and let things settle to evaluate success/failure
         self.robot.pb_client.set_step_sim(False)
 
@@ -1057,7 +1062,6 @@ class Pipeline():
             if obj_id:
                 for i in range(p.getNumJoints(self.robot.arm.robot_id)):
                     safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=obj_id, linkIndexA=i, linkIndexB=-1, enableCollision=True, physicsClientId=self.robot.pb_client.get_client_id())
-                    safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=self.table_id, linkIndexA=i, linkIndexB=self.placement_link_id, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
 
             time.sleep(0.8)
             jnt_pos_before_grasp = self.robot.arm.get_jpos()
@@ -1073,23 +1077,23 @@ class Pipeline():
                 else:
                     log_debug('Not grasped')
         else:
-            self.robot.arm.eetool.open()
-            if obj_id:
-                # turn ON collisions between object and rack, and open fingers
-                safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
-                safeCollisionFilterPair(obj_id, self.table_id, -1, self.placement_link_id, enableCollision=True)
-                
-                p.changeDynamics(obj_id, -1, linearDamping=5, angularDamping=5)
-            # constraint_grasp_open(self.o_cid)
-                grasp_success = object_is_still_grasped(self.robot, obj_id, self.right_pad_id, self.left_pad_id) 
+            release = input('Press o to open end effector or Enter to continue')
+            if release == 'o':
+                if obj_id:
+                    # turn ON collisions between object and rack, and open fingers
+                    safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
+                    safeCollisionFilterPair(obj_id, self.table_id, -1, self.placement_link_id, enableCollision=True)
+                    
+                    p.changeDynamics(obj_id, -1, linearDamping=5, angularDamping=5)
+                # constraint_grasp_open(self.o_cid)
+                    grasp_success = object_is_still_grasped(self.robot, obj_id, self.right_pad_id, self.left_pad_id) 
+                self.robot.arm.eetool.open()
+                self.state = -1
 
-            self.state = -1
-            if obj_id:
-                time.sleep(0.2)
-                for i in range(p.getNumJoints(self.robot.arm.robot_id)):
-                    safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=obj_id, linkIndexA=i, linkIndexB=-1, enableCollision=False, physicsClientId=self.robot.pb_client.get_client_id())
-                safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=False)
-
-            self.robot.arm.move_ee_xyz([0, 0.075, 0.075])
-            time.sleep(1.0)
+                self.robot.arm.move_ee_xyz([0, 0.075, 0.075])
+                time.sleep(1.0)
+            else:
+                self.state = 0
+                if 1 in self.ranked_objs:
+                    del self.ranked_objs[1]
 

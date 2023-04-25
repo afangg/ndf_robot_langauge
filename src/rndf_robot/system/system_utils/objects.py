@@ -16,9 +16,9 @@ mesh_data_dirs = {
     'bottle': 'bottle_centered_obj_normalized', 
     'bowl': 'bowl_centered_obj_normalized',
     'rack': 'syn_racks_easy_obj',
-    'tray': 'box_containers_unnormalized'
+    'container': 'box_containers_unnormalized'
 }
-# mesh_data_dirs = {k: osp.join(path_util.get_rndf_obj_descriptions(), v) for k, v in mesh_data_dirs.items()}
+mesh_data_dirs = {k: osp.join(path_util.get_rndf_obj_descriptions(), v) for k, v in mesh_data_dirs.items()}
 
 bad_ids = {
     'rack': [],
@@ -60,6 +60,8 @@ def choose_obj(meshes_dic, obj_class):
 def load_meshes_dict(cfg):
     mesh_names = {}
     for k, v in mesh_data_dirs.items():
+        print(k, v)
+
         # get train samples
         objects_raw = os.listdir(v)
         avoid_ids = bad_ids[k]

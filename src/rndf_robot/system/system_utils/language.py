@@ -44,11 +44,11 @@ def chunk_query(query):
     return sentence_dic
 
 # this needs to be handle multiple instances of the same class
-def create_keyword_dic(relevent_objs, sentence_dic):
+def create_keyword_dic(relevant_objs, sentence_dic):
     '''
     Associates each noun phrase with a object class it corresponds to and returns the pairs
 
-    @relevent_objs: set of object classes 
+    @relevant_objs: set of object classes 
     @sentence_dic: {phrase: label}
 obj
     return: [(obj_class, noun phrase)] 
@@ -57,7 +57,7 @@ obj
     verb_flag = False
     for phrase, label in sentence_dic.items():
         if label == 'NP': #noun phrase
-            for obj in relevent_objs:
+            for obj in relevant_objs:
                 if obj in phrase:
                     split_phrase = phrase.split(' ')
                     phrase = [word for word in split_phrase if word not in ARTICLES]
