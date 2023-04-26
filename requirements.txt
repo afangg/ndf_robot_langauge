@@ -42,4 +42,6 @@ cython
 urdfpy
 sentence-transformers
 flair
+git+http://github.com/facebookresearch/segment-anything.git
+transform3d
 # git+https://github.com/Improbable-AI/airobot.git@qa

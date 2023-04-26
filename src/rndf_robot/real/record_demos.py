@@ -253,7 +253,7 @@ def main(args):
     # cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.5], [0.015, 0.4], 'table'
     # cropx, cropy, cropz, crop_note = [0.3, 0.6], [0.3, 0.6], [0.01, 0.35], 'table'
 
-    cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.0], [0.01, 0.35], 'table_right'
+    cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.4, 0.0], [0.01, 0.35], 'table_right'
     # cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.0], [0.09, 0.35], 'block2'
     # cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.0], [0.09, 0.35], 'block'
     full_cropx, full_cropy, full_cropz, full_crop_note = [0.0, 0.8], [-0.65, 0.65], [-0.01, 1.0], 'full scene'

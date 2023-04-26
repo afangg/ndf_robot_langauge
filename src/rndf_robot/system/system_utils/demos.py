@@ -2,7 +2,7 @@ import os, os.path as osp
 from rndf_robot.utils import util, path_util
 
 def load_demos_dict():
-    all_demos = osp.join(path_util.get_rndf_data(), 'release_demos')
+    all_demos = osp.join(path_util.get_rndf_data(), 'release_real_demos')
     demo_dic = {}
     for class_pair in os.listdir(all_demos):
         class_pair_path = osp.join(all_demos, class_pair)

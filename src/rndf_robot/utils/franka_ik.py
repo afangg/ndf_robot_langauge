@@ -24,7 +24,6 @@ from pybullet_tools.ikfast.franka_panda.ik import PANDA_INFO, FRANKA_URDF_2F140,
 # FRANKA_URDF = FRANKA_URDF_WIDE
 # FRANKA_URDF_NOGRIPPER = osp.join(pb_planning_src, FRANKA_URDF_NOGRIPPER)
 FRANKA_URDF = osp.join(pb_planning_src, FRANKA_URDF)
-print('FRANKA URDF: ', FRANKA_URDF)
 FRANKA_URDF_2F140 = osp.join(pb_planning_src, FRANKA_URDF_2F140)
 from pybullet_tools.ikfast.ikfast import get_ik_joints, either_inverse_kinematics, check_ik_solver
 
@@ -115,6 +114,7 @@ class FrankaIK:
                     else:
                         self.robot = load_pybullet(FRANKA_URDF, base_pos=base_pos, fixed_base=True)
                         assign_link_colors(self.robot, max_colors=3, s=0.5, v=1.)
+        print('FRANKA URDF: ', FRANKA_URDF_2F140 if robotiq else FRANKA_URDF)
 
         dump_body(self.robot)
 
@@ -198,6 +198,8 @@ class FrankaIK:
         if occnet:
             self.occnet = PointCollision(None)
             self._setup_occnet_qp()
+        else:
+            self.occnet = False
 
         self.lower_limits = [get_joint_info(self.robot, joint).jointLowerLimit for joint in self.ik_joints]
         self.upper_limits = [get_joint_info(self.robot, joint).jointUpperLimit for joint in self.ik_joints]
@@ -385,7 +387,7 @@ class FrankaIK:
 
     def check_collision(self, pcd=None, thresh=0.5, hand_only=False):
         # self_collision = any_link_pair_collision(self.robot, None, self.robot, None)
-        self.update_qp()
+        # self.update_qp()
 
         within_joint_limits = self.within_joint_limits(self.get_jpos())
         if not within_joint_limits:

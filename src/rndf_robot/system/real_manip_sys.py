@@ -26,6 +26,7 @@ def main(pipeline):
     pipeline.load_models()
 
     ee_poses = pipeline.find_correspondence()
+    embed()
     pipeline.execute(ee_poses)
 
     if pipeline.state == 0:
@@ -70,6 +71,7 @@ if __name__ == "__main__":
 
     parser.add_argument('--pb_seg', action='store_true')
     parser.add_argument('--gripper_type', type=str, default='panda')
+    parser.add_argument('--port_vis', type=int, default=6000)
 
     args = parser.parse_args()
 
@@ -83,6 +85,7 @@ if __name__ == "__main__":
 
     pipeline = Pipeline(args)
     pipeline.setup_client()
+    pipeline.setup_cams()
 
     while True:
         generate_new_scene = main(pipeline)

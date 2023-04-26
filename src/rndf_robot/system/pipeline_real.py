@@ -7,7 +7,7 @@ import time
 import sys
 import meshcat
 import trimesh
-
+import open3d
 import pyrealsense2 as rs
 from polymetis import GripperInterface, RobotInterface
 
@@ -31,7 +31,8 @@ from rndf_robot.utils.pipeline_util import (
 )
 
 from rndf_robot.utils.rndf_utils import infer_relation_intersection, create_target_descriptors
-from system_utils.segmentation import detect_bbs, filter_pcds, extend_pcds, filter_regions
+from system_utils.segmentation import detect_bbs, apply_pcd_mask, apply_bb_mask, extend_pcds, filter_pcds
+from system_utils.sam_seg import get_masks
 from system_utils.language import query_correspondance, chunk_query, create_keyword_dic
 from system_utils.demos import all_demos, get_concept_demos, create_target_desc_subdir, get_model_paths
 import system_utils.objects as objects
@@ -45,7 +46,7 @@ from rndf_robot.robot.simple_multicam import MultiRealsenseLocal
 from rndf_robot.config.default_multi_realsense_cfg import get_default_multi_realsense_cfg
 from rndf_robot.utils.real.traj_util import PolymetisTrajectoryUtil
 from rndf_robot.utils.real.plan_exec_util import PlanningHelper
-from rndf_robot.utils.real.perception_util import RealsenseInterface, enable_devices
+from rndf_robot.utils.real.perception_util import enable_devices
 from rndf_robot.utils.real.polymetis_util import PolymetisHelper
 
 from rndf_robot.robot.simple_multicam import MultiRealsenseLocal
@@ -76,8 +77,9 @@ class Pipeline():
         else:
             set_log_level('info')
         
-        self.mc_vis = meshcat.Visualizer(zmq_url=f'tcp://127.0.0.1x:{args.port_vis}')
+        self.mc_vis = meshcat.Visualizer(zmq_url=f'tcp://127.0.0.1:{self.args.port_vis}')
         self.mc_vis['scene'].delete()
+        log_debug('Done with init')
 
     def reset(self, new_scene=False):
         if new_scene:
@@ -133,20 +135,19 @@ class Pipeline():
         planning.set_gripper_open_pos(gripper_open_pos)
         planning.gripper_open()
 
-        if self.args.gripper_type == '2f140':
-            grasp_pose_viz = Robotiq2F140Hand(grasp_frame=False)
-            place_pose_viz = Robotiq2F140Hand(grasp_frame=False)
-        else:
-            grasp_pose_viz = PandaHand(grasp_frame=True)
-            place_pose_viz = PandaHand(grasp_frame=True)
-        grasp_pose_viz.reset_pose()
-        place_pose_viz.reset_pose()
-        grasp_pose_viz.meshcat_show(self.mc_vis, name_prefix='grasp_pose')
-        place_pose_viz.meshcat_show(self.mc_vis, name_prefix='place_pose')
+        # if self.args.gripper_type == '2f140':
+        #     grasp_pose_viz = Robotiq2F140Hand(grasp_frame=False)
+        #     place_pose_viz = Robotiq2F140Hand(grasp_frame=False)
+        # else:
+        #     grasp_pose_viz = PandaHand(grasp_frame=True)
+        #     place_pose_viz = PandaHand(grasp_frame=True)
+        # grasp_pose_viz.reset_pose()
+        # place_pose_viz.reset_pose()
+        # grasp_pose_viz.meshcat_show(self.mc_vis, name_prefix='grasp_pose')
+        # place_pose_viz.meshcat_show(self.mc_vis, name_prefix='place_pose')
 
         self.planning = planning
         self.panda = panda
-        self.setup_cams()
 
     def setup_cams(self):
         rs_cfg = get_default_multi_realsense_cfg()
@@ -160,8 +161,6 @@ class Pipeline():
         calib_filenames = [osp.join(calib_dir, f'cam_{idx}_calib_base_to_cam.json') for idx in self.args.cam_index]
 
         self.cams = MultiRealsenseLocal(cam_names=cam_list, calib_filenames=calib_filenames)
-        
-        self.cam_interface = RealsenseLocal()
         ctx = rs.context() # Create librealsense context for managing devices
 
         # Define some constants
@@ -171,7 +170,8 @@ class Pipeline():
 
         # pipelines = enable_devices(serials, ctx, resolution_width, resolution_height, frame_rate)
         self.pipelines = enable_devices(serials, ctx, resolution_width, resolution_height, frame_rate)
-    
+        self.cam_interface = RealsenseLocal()
+
     def setup_table(self):   
         tmp_obstacle_dir = osp.join(path_util.get_rndf_obj_descriptions(), 'tmp_planning_obs')
         util.safe_makedirs(tmp_obstacle_dir)
@@ -243,7 +243,7 @@ class Pipeline():
         log_debug('All demo labels: %s' %all_demos.keys())
         while True:
             # query = self.ask_query()
-            query = "place mug_over_container", "empty the mug into the green tray"
+            query = "grasp mug_handle", "grab the mug by the handle"
             if not query: return
             corresponding_concept, query_text = query
             demos = get_concept_demos(corresponding_concept)
@@ -404,11 +404,10 @@ class Pipeline():
             if self.args.show_pcds:
                 log_debug(f'Best score was {score}')
 
-        with self.meshcat.recorder.meshcat_scene_lock:
-            for rank, obj in self.ranked_objs.items():
-                label = f'scene/initial_{rank}_pcd'
-                color = [random.randint(0,255), random.randint(0,255), random.randint(0,255)]
-                util.meshcat_pcd_show(self.mc_vis, obj['pcd'], color=color, name=label)
+        for rank, obj in self.ranked_objs.items():
+            label = f'scene/initial_{rank}_pcd'
+            color = [random.randint(0,255), random.randint(0,255), random.randint(0,255)]
+            util.meshcat_pcd_show(self.mc_vis, obj['pcd'], color=color, name=label)
 
     def get_real_pcd(self):
         pcd_pts = []
@@ -446,13 +445,14 @@ class Pipeline():
             }
             util.meshcat_pcd_show(self.mc_vis, pcd_world, color=(0, 255, 0), name=f'scene/scene_{idx}')
 
+            rgb_imgs.append(rgb)
             pcd_pts.append(pcd_world)
             pcd_dict_list.append(pcd_dict)
-        embed()
         pcd_full = np.concatenate(pcd_pts, axis=0)
         # util.meshcat_pcd_show(self.mc_vis, pcd_full, color=(0, 255, 0), name='scene/full_scene')
 
-        return pcd_full
+        return pcd_full, rgb_imgs
+    
 
     def get_real_pcd_cam(self, idx, rgb, depth):
         cam = self.cams.cams[idx]
@@ -489,26 +489,30 @@ class Pipeline():
         label_to_pcds = {}
         label_to_scores = {}
         centroid_thresh = 0.1
-        detect_thresh = 0.12
+        detect_thresh = 0.2
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
             rgb, depth = self.cam_interface.get_rgb_and_depth_image(self.pipelines[i])
             pts_2d, depth_valid = self.get_real_pcd_cam(i, rgb, depth)
-
             all_obj_bbs, all_obj_bb_scores = detect_bbs(rgb, 
                                                         captions, 
                                                         max_count=1, 
                                                         score_threshold=detect_thresh)
             log_debug(f'Detected the following captions {all_obj_bb_scores.keys()}')
 
-            for obj_label, obj_bbs in all_obj_bbs.items():
-                log_debug(f'Region count for {obj_label}: {len(obj_bbs)}')
-                obj_bbs, obj_bb_scores = filter_regions(pts_2d, depth_valid, obj_bbs, all_obj_bb_scores[obj_label])
-                log_debug(f'{obj_label} after filtering is now {len(obj_bbs)}')
-                for j in range(len(obj_bbs)):
-                    util.meshcat_pcd_show(self.mc_vis, obj_bbs[j], color=(0, 255, 0), name=f'scene/cam_{i}_{obj_label}_region_{j}')
+            if not all_obj_bbs:
+                continue
+            all_obj_masks = get_masks(rgb, all_obj_bbs)
+            # all_obj_masks = all_obj_bbs
+            for obj_label, obj_masks in all_obj_masks.items():
+                log_debug(f'Region count for {obj_label}: {len(obj_masks)}')
+                obj_pcds, obj_scores = apply_pcd_mask(pts_2d, depth_valid, obj_masks, all_obj_bb_scores[obj_label])
+                log_debug(f'{obj_label} after filtering is now {len(obj_pcds)}')
+                cam_pcds, cam_scores = filter_pcds(obj_pcds, obj_scores)
+                for j in range(len(cam_pcds)):
+                    util.meshcat_pcd_show(self.mc_vis, cam_pcds[j], color=(0, 255, 0), name=f'scene/cam_{i}_{obj_label}_region_{j}')
 
-                cam_pcds, cam_scores = filter_pcds(obj_bbs, obj_bb_scores)
+                cam_pcds, cam_scores = obj_pcds, obj_scores
                 if not cam_pcds:
                     continue
                 if obj_label not in label_to_pcds:
@@ -538,9 +542,9 @@ class Pipeline():
                 if obj_label not in pcds_output:
                     pcds_output[obj_label] = []
                 pcds_output[obj_label].append((score, target_obj_pcd_obs))
-                if self.args.debug:
-                    trimesh_util.trimesh_show([target_obj_pcd_obs])
-        return pcds_output
+                # if self.args.debug:
+                #     trimesh_util.trimesh_show([target_obj_pcd_obs])
+        return pcds_output        
 
     #################################################################################################
     # Process demos
@@ -769,12 +773,10 @@ class Pipeline():
             relational_target_desc, target_desc = self.ranked_objs[relational_rank]['target_desc'], self.ranked_objs[target_rank]['target_desc']
             relational_query_pts, target_query_pcd = self.ranked_objs[relational_rank]['query_pts'], self.ranked_objs[target_rank]['query_pts']
 
-            self.meshcat.pause_mc_thread(True)
             final_pose_mat = infer_relation_intersection(
                 self.mc_vis, relational_optimizer, optimizer, 
                 relational_target_desc, target_desc, 
                 relational_pcd, target_pcd, relational_query_pts, target_query_pcd, opt_visualize=self.args.opt_visualize)
-            self.meshcat.pause_mc_thread(False)
         else:
             optimizer.set_demo_info(self.ranked_objs[target_rank]['demo_info'])
             pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=False, visualize=self.args.opt_visualize)
@@ -809,7 +811,7 @@ class Pipeline():
     # Motion Planning 
     def execute(self, ee_poses, execute=False):
         jnt_poses = [self.cascade_ik(pose) for pose in ee_poses]
-        self.planning(joint_position_desired=jnt_poses,
+        self.planning.plan_joint_target(joint_position_desired=jnt_poses,
                       execute=execute)
         if execute:
             self.post_execution()
@@ -828,8 +830,7 @@ class Pipeline():
         transform = util.matrix_from_pose(util.list2pose_stamped(relative_pose[0]))
 
         final_pcd = util.transform_pcd(obj_pcd, transform)
-        with self.meshcat.recorder.meshcat_scene_lock:
-            util.meshcat_pcd_show(self.mc_vis, final_pcd, color=[255, 0, 255], name=f'scene/target_pcd')
+        util.meshcat_pcd_show(self.mc_vis, final_pcd, color=(255, 0, 255), name=f'scene/teleported_obj')
 
     def post_execution(self):
         if self.state == 0:

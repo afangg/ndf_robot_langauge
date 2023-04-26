@@ -264,17 +264,18 @@ def get_largest_pcd(pcd, show_scene=False):
         cluster_sizes.append(sz)
     top2sz = np.argsort(cluster_sizes)[-1]
     # top2clusters = np.concatenate([pcd_clusters[top2sz[0]], pcd_clusters[top2sz[1]]], axis=0)
-    return pcd_clusters[top2sz]
+    # return pcd_clusters[top2sz]
     # if len(labels) == 0: return np.array([])
     # freq_label = mode(labels)[0][0]
     # max_pcd = pcd[np.where(labels == freq_label)]
-    # if show_scene:
-    #     pcds = []
-    #     for label in set(labels):
-    #         label_pcd = pcd[np.where(labels == label)]
-    #         pcds.append(label_pcd)
-    #     trimesh_util.trimesh_show(pcds)
-    return max_pcd      
+    if show_scene:
+        pcds = []
+        for label in set(labels):
+            label_pcd = pcd[np.where(labels == label)]
+            pcds.append(label_pcd)
+        trimesh_util.trimesh_show(pcds)
+    # return max_pcd      
+    return pcd_clusters[top2sz]
 
 def extend_pcds(cam_pcds, pcd_list, cam_scores, pcd_scores, threshold=0.08):
     '''
@@ -297,6 +298,7 @@ def extend_pcds(cam_pcds, pcd_list, cam_scores, pcd_scores, threshold=0.08):
     # centroids = np.average(pcd_list, axis=1)
     # new_centroids = np.average(cam_pcds, axis=1)
     new_list = []
+    new_scores = []
     for i, centroid in enumerate(centroids):
         new_centroids = np.array([np.average(pcd, axis=0) for pcd in cam_pcds])
         if len(new_centroids) == 0: break
@@ -305,31 +307,34 @@ def extend_pcds(cam_pcds, pcd_list, cam_scores, pcd_scores, threshold=0.08):
         min_idx = np.argmin(centroid_dists)
         log_debug(f'closest centroid is {centroid_dists[min_idx]} away')
 
-        updated_pcds = pcd_list[i]
         if centroid_dists[min_idx] <= threshold:
-            updated_pcds = np.concatenate((updated_pcds, cam_pcds[min_idx]))
-            pcd_scores[i].append(cam_scores.pop(min_idx)[0])
-            cam_pcds = np.delete(cam_pcds, min_idx, axis=0)
-            new_centroids = np.delete(new_centroids, min_idx, axis=0)
-        new_list.append(updated_pcds)
+            original_pcd = pcd_list[i]
+            updated_pcds = np.concatenate((original_pcd, cam_pcds[min_idx]))
+            new_score = pcd_scores[i] + [cam_scores[min_idx][0]]
+            new_list.append(updated_pcds)
+            new_scores.append(new_score)
+        else:
+            new_list.append(pcd_list[i])
+            new_scores.append(pcd_scores[i])
     else:
         return pcd_list, pcd_scores
-    return new_list + list(cam_pcds), pcd_scores + cam_scores
+    return new_list, new_scores
 
 def filter_pcds(pcds, scores):
     label_pcds = []
     label_scores = []
     for i, full_pcd in enumerate(pcds):
-        largest_cluster = get_largest_pcd(full_pcd, show_scene=False)
+        # largest_cluster = get_largest_pcd(full_pcd, show_scene=True)
+        largest_cluster = full_pcd
         obj_z = largest_cluster[:, 2]
         min_z = full_pcd[:, 2].min()
 
         # table_mask = np.where(obj_z <= min_z+0.01)
         # obj_mask = np.where(obj_z > min_z+0.005)
         # obj_pcd = largest_cluster[obj_mask]
-        # largest_cluster_mean = np.mean(largest_cluster, axis=0)
-        # inliers = np.where(np.linalg.norm(largest_cluster - largest_cluster_mean, 2, 1) < 0.2)[0]
-        # largest_cluster = largest_cluster[inliers]
+        largest_cluster_mean = np.mean(largest_cluster, axis=0)
+        inliers = np.where(np.linalg.norm(largest_cluster - largest_cluster_mean, 2, 1) < 0.2)[0]
+        largest_cluster = largest_cluster[inliers]
 
         obj_pcd = largest_cluster
         label_pcds.append(obj_pcd)
@@ -355,37 +360,98 @@ def mode(a, axis=0):
 
     return mostfrequent, oldcounts
 
-def filter_regions(full_pcd, depth_valid, bbs, bb_scores):
+def apply_bb_mask(full_pcd, depth_valid, bbs, bb_scores):
     filtered_regions = []
     filtered_scores = []
     for i, bb in enumerate(bbs):
         xmin,ymin,xmax,ymax, = bb
+        mask = np.zeros(depth_valid.shape)
+        mask[xmin:xmax+1, ymin:ymax+1] = 1
         camera_mask = depth_valid != 0
         # camera_mask = np.where(depth >= .1)
         camera_binary = np.zeros(depth_valid.shape)
         camera_binary[camera_mask] = 1
-        bb_binary = np.zeros(depth_valid.shape)
-        bb_binary[xmin:xmax+1, ymin:ymax+1] = 1
-        joined_mask = np.logical_and(camera_binary, bb_binary)
-        full_pcd_copy = copy.deepcopy(full_pcd)
-        cropped_pcd = full_pcd_copy[joined_mask]
+        joined_mask = np.logical_and(camera_binary, mask)
+
+        cropped_pcd = full_pcd[joined_mask]
         flat_pcd = cropped_pcd.reshape((-1, 3))
-        embed()
+        np.random.shuffle(flat_pcd)
+        downsampled_region = flat_pcd[::3]
+        if not downsampled_region.any():
+            continue
+
+        largest = get_largest_pcd(downsampled_region)
+        downsampled_region = largest
+
+        filtered_regions.append(downsampled_region)
+        filtered_scores.append(bb_scores[i])
+        # trimesh_util.trimesh_show([downsampled_region, after_camera, after_bb])
+    if filtered_regions:
+        # trimesh_util.trimesh_show(filtered_regions)
+        pass
+    else:
+        log_debug('After filtering, there are no more bbs')
+    return filtered_regions, filtered_scores
+
+def apply_pcd_mask(full_pcd, depth_valid, masks, bb_scores):
+    filtered_regions = []
+    filtered_scores = []
+    for i, mask in enumerate(masks):
+        # embed()
+
+        camera_mask = depth_valid != 0
+        # camera_mask = np.where(depth >= .1)
+        camera_binary = np.zeros(depth_valid.shape)
+        camera_binary[camera_mask] = 1
+        joined_mask = np.logical_and(camera_binary, mask)
+
+        cropped_pcd = full_pcd[joined_mask]
+        flat_pcd = cropped_pcd.reshape((-1, 3))
         np.random.shuffle(flat_pcd)
         downsampled_region = flat_pcd[::3]
         if not downsampled_region.any():
             continue
         filtered_regions.append(downsampled_region)
         filtered_scores.append(bb_scores[i])
-
-        after_camera = full_pcd_copy[np.logical_and(camera_binary, np.ones(depth_valid.shape))]
-        after_bb = full_pcd_copy[np.logical_and(bb_binary, np.ones(depth_valid.shape))]
-
-        trimesh_util.trimesh_show([downsampled_region, after_camera, after_bb])
+        # trimesh_util.trimesh_show([downsampled_region, after_camera, after_bb])
     if filtered_regions:
-        trimesh_util.trimesh_show(filtered_regions)
+        # trimesh_util.trimesh_show(filtered_regions)
         pass
     else:
         log_debug('After filtering, there are no more bbs')
-        embed()
     return filtered_regions, filtered_scores
+
+# def filter_regions(full_pcd, depth_valid, bbs, bb_scores):
+#     filtered_regions = []
+#     filtered_scores = []
+#     for i, bb in enumerate(bbs):
+#         xmin,ymin,xmax,ymax, = bb
+#         camera_mask = depth_valid != 0
+#         # camera_mask = np.where(depth >= .1)
+#         camera_binary = np.zeros(depth_valid.shape)
+#         camera_binary[camera_mask] = 1
+#         xmin,ymin,xmax,ymax, = bb
+#         bb_binary = np.zeros(depth_valid.shape)
+#         bb_binary[xmin:xmax+1, ymin:ymax+1] = 1
+#         joined_mask = np.logical_and(camera_binary, bb_binary)
+#         joined_mask = np.logical_and(bb_binary, bb_binary)
+#         full_pcd_copy = copy.deepcopy(full_pcd)
+#         cropped_pcd = full_pcd_copy[joined_mask]
+#         flat_pcd = cropped_pcd.reshape((-1, 3))
+#         np.random.shuffle(flat_pcd)
+#         downsampled_region = flat_pcd[::3]
+#         if not downsampled_region.any():
+#             continue
+#         filtered_regions.append(downsampled_region)
+#         filtered_scores.append(bb_scores[i])
+
+#         after_camera = full_pcd_copy[np.logical_and(camera_binary, np.ones(depth_valid.shape))]
+#         after_bb = full_pcd_copy[np.logical_and(bb_binary, np.ones(depth_valid.shape))]
+
+#         # trimesh_util.trimesh_show([downsampled_region, after_camera, after_bb])
+#     if filtered_regions:
+#         # trimesh_util.trimesh_show(filtered_regions)
+#         pass
+#     else:
+#         log_debug('After filtering, there are no more bbs')
+#     return filtered_regions, filtered_scores
