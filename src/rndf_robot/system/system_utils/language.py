@@ -6,28 +6,28 @@ from flair.data import Sentence
 import torch
 import numpy as np
 
-llm = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+# llm = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
 tagger = SequenceTagger.load('flair/chunk-english')
 
 ARTICLES = {'a', 'an', 'the'}
 
-def query_correspondance(existing_concepts, query):
-    '''
-    Finds the cosine similarity between the existing concepts and the input query text.
-    Returns the list of concepts sorted in decreasing order of similarity
+# def query_correspondance(existing_concepts, query):
+#     '''
+#     Finds the cosine similarity between the existing concepts and the input query text.
+#     Returns the list of concepts sorted in decreasing order of similarity
 
-    return: list of concepts sorted by similarity to the query
-    '''
+#     return: list of concepts sorted by similarity to the query
+#     '''
 
-    #existing_concepts = existing_concepts.replace('_', ' ')
-    query = query.replace('_', ' ')
-    concept_embeddings = llm.encode(existing_concepts, convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True)
-    target_embedding= llm.encode(query, convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True)
-    scores = dot_score(target_embedding, concept_embeddings)
-    sorted_scores, idx = torch.sort(scores, descending=True)
-    sorted_scores, idx = sorted_scores.flatten(), idx.flatten()
-    idx = idx.detach().cpu().numpy()
-    return np.array(existing_concepts)[idx]
+#     #existing_concepts = existing_concepts.replace('_', ' ')
+#     query = query.replace('_', ' ')
+#     concept_embeddings = llm.encode(existing_concepts, convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True)
+#     target_embedding= llm.encode(query, convert_to_tensor=True, show_progress_bar=False, normalize_embeddings=True)
+#     scores = dot_score(target_embedding, concept_embeddings)
+#     sorted_scores, idx = torch.sort(scores, descending=True)
+#     sorted_scores, idx = sorted_scores.flatten(), idx.flatten()
+#     idx = idx.detach().cpu().numpy()
+#     return np.array(existing_concepts)[idx]
 
 def chunk_query(query):
     '''

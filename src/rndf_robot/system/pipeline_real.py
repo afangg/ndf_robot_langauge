@@ -33,7 +33,8 @@ from rndf_robot.utils.pipeline_util import (
 from rndf_robot.utils.rndf_utils import infer_relation_intersection, create_target_descriptors
 from system_utils.segmentation import detect_bbs, apply_pcd_mask, apply_bb_mask, extend_pcds, filter_pcds
 from system_utils.sam_seg import get_masks
-from system_utils.language import query_correspondance, chunk_query, create_keyword_dic
+from system_utils.language import chunk_query, create_keyword_dic
+# from system_utils.language import query_correspondance
 from system_utils.demos import all_demos, get_concept_demos, create_target_desc_subdir, get_model_paths
 import system_utils.objects as objects
 
@@ -79,6 +80,8 @@ class Pipeline():
         
         self.mc_vis = meshcat.Visualizer(zmq_url=f'tcp://127.0.0.1:{self.args.port_vis}')
         self.mc_vis['scene'].delete()
+        self.mc_vis['optimizer'].delete()
+
         log_debug('Done with init')
 
     def reset(self, new_scene=False):
@@ -264,31 +267,31 @@ class Pipeline():
         log_debug('Current State is %s' %self.state)
         return corresponding_concept, query_text
 
-    def ask_query(self):
-        '''
-        Prompts the user to input a command and identifies concept
+    # def ask_query(self):
+    #     '''
+    #     Prompts the user to input a command and identifies concept
 
-        return: the concept most similar to their query and their input text
-        '''
-        concepts = list(all_demos.keys())
-        while True:
-            query_text = input('Please enter a query or \'reset\' to reset the scene\n')
-            if not query_text: continue
-            if query_text.lower() == "reset": return
-            ranked_concepts = query_correspondance(concepts, query_text)
-            corresponding_concept = None
-            for concept in ranked_concepts:
-                print('Corresponding concept:', concept)
-                correct = input('Corrent concept? (y/n)\n')
-                if correct == 'n':
-                    continue
-                elif correct == 'y':
-                    corresponding_concept = concept
-                    break
+    #     return: the concept most similar to their query and their input text
+    #     '''
+    #     concepts = list(all_demos.keys())
+    #     while True:
+    #         query_text = input('Please enter a query or \'reset\' to reset the scene\n')
+    #         if not query_text: continue
+    #         if query_text.lower() == "reset": return
+    #         ranked_concepts = query_correspondance(concepts, query_text)
+    #         corresponding_concept = None
+    #         for concept in ranked_concepts:
+    #             print('Corresponding concept:', concept)
+    #             correct = input('Corrent concept? (y/n)\n')
+    #             if correct == 'n':
+    #                 continue
+    #             elif correct == 'y':
+    #                 corresponding_concept = concept
+    #                 break
             
-            if corresponding_concept:
-                break
-        return corresponding_concept, query_text
+    #         if corresponding_concept:
+    #             break
+    #     return corresponding_concept, query_text
 
 
     def identify_classes_from_query(self, query, corresponding_concept):
@@ -471,7 +474,11 @@ class Pipeline():
         pcd_cam_img = pcd_cam.reshape(depth.shape[0], depth.shape[1], 3)
         pcd_world = util.transform_pcd(pcd_cam, cam_pose_world)
         pcd_world_img = pcd_world.reshape(depth.shape[0], depth.shape[1], 3)
-        util.meshcat_pcd_show(self.mc_vis, pcd_world, name=f'scene/pcd_world_cam_{idx}')
+    
+        cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.4, 0.0], [0.01, 0.35], 'table_right'
+        proc_pcd = manually_segment_pcd(pcd_world, x=cropx, y=cropy, z=cropz, note=crop_note)
+
+        util.meshcat_pcd_show(self.mc_vis, proc_pcd, name=f'scene/pcd_world_cam_{idx}')
 
         return pcd_world_img, depth_valid
     
@@ -512,7 +519,8 @@ class Pipeline():
                 for j in range(len(cam_pcds)):
                     util.meshcat_pcd_show(self.mc_vis, cam_pcds[j], color=(0, 255, 0), name=f'scene/cam_{i}_{obj_label}_region_{j}')
 
-                cam_pcds, cam_scores = obj_pcds, obj_scores
+                # this was not commented out?
+                # cam_pcds, cam_scores = obj_pcds, obj_scores
                 if not cam_pcds:
                     continue
                 if obj_label not in label_to_pcds:
@@ -811,8 +819,20 @@ class Pipeline():
     # Motion Planning 
     def execute(self, ee_poses, execute=False):
         jnt_poses = [self.cascade_ik(pose) for pose in ee_poses]
-        self.planning.plan_joint_target(joint_position_desired=jnt_poses,
-                      execute=execute)
+        start_pose = None
+        for jnt_pose in jnt_poses:
+            if not execute:
+                self.planning.plan_joint_target(joint_position_desired=jnt_pose, 
+                                                from_current=False, 
+                                                start_position=start_pose, 
+                                                execute=execute)
+                start_pose = jnt_pose
+            else:
+                self.planning.plan_joint_target(joint_position_desired=jnt_pose, 
+                                                from_current=True, 
+                                                start_position=None, 
+                                                execute=execute)
+
         if execute:
             self.post_execution()
 

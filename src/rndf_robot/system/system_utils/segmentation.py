@@ -160,32 +160,24 @@ def owlvit_detect(image, descriptions, top=None, score_threshold=0.05, show_seg=
             bounding_boxes[label] = []
             highest_scores[label] = []
         
-        # what to do if two objs of the same class are on top of each other lol (one in front of the other)
-        # just remove larger one? idk
-        remove_idx = None
-        for i, existing_bb in enumerate(bounding_boxes[label]):
-            smaller = bb_contained(box, existing_bb) 
-            if smaller == 0: # this new bb is bigger, don't add it
-                remove_idx = -1
-            elif smaller == 1: # this new bb is smaller and overlaps, remove the bigger one
-                remove_idx = i
-            else: # they dont overlap, continue
-                continue
+        # # what to do if two objs of the same class are on top of each other lol (one in front of the other)
+        # # just remove larger one? idk
+        # remove_idx = None
+        # for i, existing_bb in enumerate(bounding_boxes[label]):
+        #     smaller = bb_contained(box, existing_bb) 
+        #     if smaller == 0: # this new bb is bigger, don't add it
+        #         remove_idx = -1
+        #     elif smaller == 1: # this new bb is smaller and overlaps, remove the bigger one
+        #         remove_idx = i
+        #     else: # they dont overlap, continue
+        #         continue
         score = round(score.item(),3)
         bounding_boxes[label].append(box)
         highest_scores[label].append([score])
-        if remove_idx is not None:
-            del bounding_boxes[label][remove_idx]
-            del highest_scores[label][remove_idx]
+        # if remove_idx is not None:
+        #     del bounding_boxes[label][remove_idx]
+        #     del highest_scores[label][remove_idx]
 
-        # obj_captions[label]
-        # for existing_bb in obj_captions[label]:
-        #     not_contained = False
-        #     for i in range(4):
-        #         if box[i] >= existing_bb[i]:
-        #             not_contained = True
-        #             break
-        #     if not_contained: continue
     print(bounding_boxes)
 
     if show_seg:
@@ -194,11 +186,7 @@ def owlvit_detect(image, descriptions, top=None, score_threshold=0.05, show_seg=
             scores = highest_scores[label]
             for i in range(len(bbs)):
                 xmin,ymin,xmax,ymax = bbs[i]
-                # score = round(scores[i].item(), 3)
                 score = scores[i]
-                # print(f"Detected {label} with confidence {score} at location {bb}")
-                # draw_bounding_box_on_image(pil_image, ymin, xmin, ymax, xmax, color=np.random.choice(STANDARD_COLORS), 
-                #                         display_str_list=[f"{label}: {score}"], use_normalized_coordinates=False)
                 draw_bounding_box_on_image(pil_image, ymin, xmin, ymax, xmax, color=np.random.choice(STANDARD_COLORS), 
                                 display_str_list=[f"{label}: {score}"], use_normalized_coordinates=False)
         plt.imshow(pil_image)
@@ -420,38 +408,3 @@ def apply_pcd_mask(full_pcd, depth_valid, masks, bb_scores):
     else:
         log_debug('After filtering, there are no more bbs')
     return filtered_regions, filtered_scores
-
-# def filter_regions(full_pcd, depth_valid, bbs, bb_scores):
-#     filtered_regions = []
-#     filtered_scores = []
-#     for i, bb in enumerate(bbs):
-#         xmin,ymin,xmax,ymax, = bb
-#         camera_mask = depth_valid != 0
-#         # camera_mask = np.where(depth >= .1)
-#         camera_binary = np.zeros(depth_valid.shape)
-#         camera_binary[camera_mask] = 1
-#         xmin,ymin,xmax,ymax, = bb
-#         bb_binary = np.zeros(depth_valid.shape)
-#         bb_binary[xmin:xmax+1, ymin:ymax+1] = 1
-#         joined_mask = np.logical_and(camera_binary, bb_binary)
-#         joined_mask = np.logical_and(bb_binary, bb_binary)
-#         full_pcd_copy = copy.deepcopy(full_pcd)
-#         cropped_pcd = full_pcd_copy[joined_mask]
-#         flat_pcd = cropped_pcd.reshape((-1, 3))
-#         np.random.shuffle(flat_pcd)
-#         downsampled_region = flat_pcd[::3]
-#         if not downsampled_region.any():
-#             continue
-#         filtered_regions.append(downsampled_region)
-#         filtered_scores.append(bb_scores[i])
-
-#         after_camera = full_pcd_copy[np.logical_and(camera_binary, np.ones(depth_valid.shape))]
-#         after_bb = full_pcd_copy[np.logical_and(bb_binary, np.ones(depth_valid.shape))]
-
-#         # trimesh_util.trimesh_show([downsampled_region, after_camera, after_bb])
-#     if filtered_regions:
-#         # trimesh_util.trimesh_show(filtered_regions)
-#         pass
-#     else:
-#         log_debug('After filtering, there are no more bbs')
-#     return filtered_regions, filtered_scores

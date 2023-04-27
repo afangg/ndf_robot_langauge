@@ -77,6 +77,7 @@ class RealsenseLocal:
 def enable_devices(serials, ctx, resolution_width = 640,resolution_height = 480, frame_rate = 30):
     pipelines = []
     for serial in serials:
+        print(serial)
         pipe = rs.pipeline(ctx)
         cfg = rs.config()
         cfg.enable_device(serial)
