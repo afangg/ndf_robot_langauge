@@ -32,6 +32,7 @@ from rndf_robot.utils.real.plan_exec_util import PlanningHelper
 from rndf_robot.utils.real.perception_util import RealsenseInterface, enable_devices
 from rndf_robot.utils.real.polymetis_util import PolymetisHelper
 
+from rndf_robot.system.system_utils.sam_seg import get_mask_from_bb
 
 poly_util = PolymetisHelper()
 

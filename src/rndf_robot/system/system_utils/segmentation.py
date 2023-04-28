@@ -40,6 +40,28 @@ STANDARD_COLORS = [
     'WhiteSmoke', 'Yellow', 'YellowGreen'
 ]
 
+cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.4, 0.0], [0.01, 0.35], 'table_right'
+
+
+def get_real_pcd_cam(cam, pipeline, interface, rgb, depth):
+    cam_intrinsics = interface.get_intrinsics_mat(pipeline)
+
+    cam.cam_int_mat = cam_intrinsics
+    cam._init_pers_mat()
+    cam_pose_world = cam.cam_ext_mat
+
+    valid = depth < cam.depth_max
+    valid = np.logical_and(valid, depth > cam.depth_min)
+    depth_valid = copy.deepcopy(depth)
+    depth_valid[np.logical_not(valid)] = 0.0 # not exactly sure what to put for invalid depth
+
+    pcd_cam = cam.get_pcd(in_world=False, filter_depth=False, rgb_image=rgb, depth_image=depth_valid)[0]
+    pcd_cam_img = pcd_cam.reshape(depth.shape[0], depth.shape[1], 3)
+    pcd_world = util.transform_pcd(pcd_cam, cam_pose_world)
+    pcd_world_img = pcd_world.reshape(depth.shape[0], depth.shape[1], 3)
+
+    return pcd_world_img, depth_valid
+
 def draw_bounding_box_on_image(image,
                                ymin,
                                xmin,
@@ -113,7 +135,6 @@ def draw_bounding_box_on_image(image,
         fill='black',
         font=font)
     text_bottom -= text_height - 2 * margin
-
 
 def owlvit_detect(image, descriptions, top=None, score_threshold=0.05, show_seg=False):
     '''
@@ -285,7 +306,7 @@ def extend_pcds(cam_pcds, pcd_list, cam_scores, pcd_scores, threshold=0.08):
 
     # centroids = np.average(pcd_list, axis=1)
     # new_centroids = np.average(cam_pcds, axis=1)
-    new_list = []
+    new_pcds = []
     new_scores = []
     for i, centroid in enumerate(centroids):
         new_centroids = np.array([np.average(pcd, axis=0) for pcd in cam_pcds])
@@ -297,16 +318,17 @@ def extend_pcds(cam_pcds, pcd_list, cam_scores, pcd_scores, threshold=0.08):
 
         if centroid_dists[min_idx] <= threshold:
             original_pcd = pcd_list[i]
-            updated_pcds = np.concatenate((original_pcd, cam_pcds[min_idx]))
+            updated_pcds = np.concatenate([original_pcd, cam_pcds[min_idx]], axis=0)
             new_score = pcd_scores[i] + [cam_scores[min_idx][0]]
-            new_list.append(updated_pcds)
+            new_pcds.append(updated_pcds)
             new_scores.append(new_score)
         else:
-            new_list.append(pcd_list[i])
+            new_pcds.append(pcd_list[i])
             new_scores.append(pcd_scores[i])
-    else:
+
+    if new_pcds == []:
         return pcd_list, pcd_scores
-    return new_list, new_scores
+    return new_pcds, new_scores
 
 def filter_pcds(pcds, scores):
     label_pcds = []

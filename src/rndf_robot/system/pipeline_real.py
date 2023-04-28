@@ -68,6 +68,7 @@ class Pipeline():
 
         self.cfg = self.get_env_cfgs()
         self.current_panda_plan = []
+        self.gripper_is_open = True
 
         self.ranked_objs = {}
         random.seed(self.args.seed)
@@ -95,7 +96,8 @@ class Pipeline():
 
         self.mc_vis['optimizer'].delete()
         self.ranked_objs = {}
-        self.reset_robot()
+        if not self.gripper_is_open:
+            self.reset_robot()
         self.state = -1
         time.sleep(1.5)
 
@@ -136,7 +138,9 @@ class Pipeline():
         planning.set_gripper_speed(gripper_speed)
         planning.set_gripper_force(gripper_force)
         planning.set_gripper_open_pos(gripper_open_pos)
-        planning.gripper_open()
+        if not self.gripper_is_open:
+            planning.gripper_open()
+            self.gripper_is_open = True
 
         # if self.args.gripper_type == '2f140':
         #     grasp_pose_viz = Robotiq2F140Hand(grasp_frame=False)
@@ -159,6 +163,7 @@ class Pipeline():
         prefix = rs_cfg.CAMERA_NAME_PREFIX
         camera_names = [f'{prefix}{i}' for i in range(len(serials))]
         cam_list = [camera_names[int(idx)] for idx in self.args.cam_index]       
+        serials = [serials[int(idx)] for idx in self.args.cam_index]
 
         calib_dir = osp.join(path_util.get_rndf_src(), 'robot/camera_calibration_files')
         calib_filenames = [osp.join(calib_dir, f'cam_{idx}_calib_base_to_cam.json') for idx in self.args.cam_index]
@@ -203,8 +208,12 @@ class Pipeline():
         
     def reset_robot(self):
         current_panda_plan = self.planning.plan_home()
-        self.planning.execute_loop(current_panda_plan)            
-        self.planning.gripper_open()
+        self.planning.execute_pb_loop(current_panda_plan)            
+        i = input('Take it home (y/n)?')
+        if i == 'y':
+            self.planning.execute_loop(current_panda_plan)            
+            self.planning.gripper_open()
+            self.gripper_is_open = True
 
     # def test_execution(self, current_panda_plan):
     #     if len(current_panda_plan) == 0:
@@ -453,7 +462,7 @@ class Pipeline():
             pcd_dict_list.append(pcd_dict)
         pcd_full = np.concatenate(pcd_pts, axis=0)
         # util.meshcat_pcd_show(self.mc_vis, pcd_full, color=(0, 255, 0), name='scene/full_scene')
-
+        torch.cuda.empty_cache()
         return pcd_full, rgb_imgs
     
 
@@ -515,20 +524,20 @@ class Pipeline():
                 log_debug(f'Region count for {obj_label}: {len(obj_masks)}')
                 obj_pcds, obj_scores = apply_pcd_mask(pts_2d, depth_valid, obj_masks, all_obj_bb_scores[obj_label])
                 log_debug(f'{obj_label} after filtering is now {len(obj_pcds)}')
-                cam_pcds, cam_scores = filter_pcds(obj_pcds, obj_scores)
-                for j in range(len(cam_pcds)):
-                    util.meshcat_pcd_show(self.mc_vis, cam_pcds[j], color=(0, 255, 0), name=f'scene/cam_{i}_{obj_label}_region_{j}')
+                obj_pcds, obj_scores = filter_pcds(obj_pcds, obj_scores)
+                for j in range(len(obj_pcds)):
+                    util.meshcat_pcd_show(self.mc_vis, obj_pcds[j], color=(0, 255, 0), name=f'scene/cam_{i}_{obj_label}_region_{j}')
 
                 # this was not commented out?
                 # cam_pcds, cam_scores = obj_pcds, obj_scores
-                if not cam_pcds:
+                if not obj_pcds:
                     continue
                 if obj_label not in label_to_pcds:
-                    label_to_pcds[obj_label], label_to_scores[obj_label] = cam_pcds, cam_scores
+                    label_to_pcds[obj_label], label_to_scores[obj_label] = obj_pcds, obj_scores
                 else:
-                    new_pcds, new_lables = extend_pcds(cam_pcds, 
+                    new_pcds, new_lables = extend_pcds(obj_pcds, 
                                                        label_to_pcds[obj_label], 
-                                                       cam_scores, 
+                                                       obj_scores, 
                                                        label_to_scores[obj_label], 
                                                        threshold=centroid_thresh)
                     label_to_pcds[obj_label], label_to_scores[obj_label] = new_pcds, new_lables
@@ -817,24 +826,61 @@ class Pipeline():
 
     #########################################################################################################
     # Motion Planning 
-    def execute(self, ee_poses, execute=False):
+    def execute(self, ee_poses):
         jnt_poses = [self.cascade_ik(pose) for pose in ee_poses]
+
+        i = 0
+
         start_pose = None
+        joint_traj = []
         for jnt_pose in jnt_poses:
-            if not execute:
-                self.planning.plan_joint_target(joint_position_desired=jnt_pose, 
+            input('Press enter to show next plan')
+            # if not execute:
+            if start_pose is None:
+                resulting_traj = self.planning.plan_joint_target(joint_position_desired=jnt_pose, 
+                            from_current=True, 
+                            start_position=None, 
+                            execute=False)
+            else:
+                resulting_traj = self.planning.plan_joint_target(joint_position_desired=jnt_pose, 
                                                 from_current=False, 
                                                 start_position=start_pose, 
-                                                execute=execute)
-                start_pose = jnt_pose
+                                                execute=False)
+            start_pose = jnt_pose
+            # else:
+            #     resulting_traj = self.planning.plan_joint_target(joint_position_desired=jnt_pose, 
+            #                                     from_current=True, 
+            #                                     start_position=None, 
+            #                                     execute=execute)
+            if resulting_traj is None:
+                break
             else:
-                self.planning.plan_joint_target(joint_position_desired=jnt_pose, 
-                                                from_current=True, 
-                                                start_position=None, 
-                                                execute=execute)
+                joint_traj += resulting_traj
+        else:
+            while True:
+                i = input(
+                    '''What should we do
+                        [s]: Run in sim
+                        [e]: Execute on robot
+                        [b]: Exit
+                    ''')
+                
+                if i == 's':
+                    self.planning.execute_pb_loop(joint_traj)
+                    continue
+                elif i == 'e':
+                    confirm = input('Should we execute (y/n)???')
+                    if confirm == 'y':
+                        self.pre_execution()
+                        self.planning.execute_loop(joint_traj)
+                        self.post_execution()
 
-        if execute:
-            self.post_execution()
+                    continue
+                elif i == 'b':
+                    break
+                else:
+                    print('Unknown command')
+                    continue
 
     def cascade_ik(self, ee_pose):
         jnt_pos = None
@@ -852,10 +898,19 @@ class Pipeline():
         final_pcd = util.transform_pcd(obj_pcd, transform)
         util.meshcat_pcd_show(self.mc_vis, final_pcd, color=(255, 0, 255), name=f'scene/teleported_obj')
 
+    def pre_execution(self):
+        if self.state == 0:
+            if not self.gripper_is_open:
+                self.planning.gripper_open()
+                self.gripper_is_open = True
+
     def post_execution(self):
         if self.state == 0:
             time.sleep(0.8)
-            self.planning.gripper_grasp()
+            if self.gripper_is_open:
+                self.planning.gripper_grasp()
+                self.gripper_is_open = False
+            
 
         else:
             release = input('Press o to open end effector or Enter to continue')

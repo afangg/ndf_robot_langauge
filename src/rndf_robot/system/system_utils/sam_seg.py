@@ -29,9 +29,8 @@ predictor = SamPredictor(build_sam(checkpoint=chkpt_path))
 checkpoint = "sam_vit_h_4b8939.pth"
 model_type = "vit_h"
 sam = sam_model_registry[model_type](checkpoint=chkpt_path)
-# sam.to(device='cuda')
+sam.to(device='cuda')
 predictor = SamPredictor(sam)
-
 
 def get_masks(image, all_obj_bbs):
     predictor.set_image(image)
@@ -41,13 +40,32 @@ def get_masks(image, all_obj_bbs):
     for caption in captions:
         all_obj_masks[caption] = []
         for bb in all_obj_bbs[caption]:
-            print(bb)
-
-            bb_inpt = np.array([np.array(bb)])
-            masks_np, iou_predictions_np, low_res_masks_np = predictor.predict(box = bb_inpt)
-            if len(masks_np) == 0:
+            combined_mask = get_mask_from_bb(bb)
+            if combined_mask is None:
                 continue
-            combined_mask = np.array(np.sum(masks_np, axis=0), dtype=bool)
             all_obj_masks[caption].append(combined_mask)
 
     return all_obj_masks
+
+def get_mask_from_bb(bb, image=None,):
+    if image is not None:
+        predictor.set_image(image)
+
+    bb_inpt = np.array([np.array(bb)])
+    masks_np, _, _ = predictor.predict(box = bb_inpt)
+    if len(masks_np) == 0:
+        return []
+    combined_mask = np.array(np.sum(masks_np, axis=0), dtype=bool)
+    return combined_mask
+
+def get_mask_from_pt(input_pt, pt_label=1, image=None,):
+    if image is not None:
+        predictor.set_image(image)
+
+    pt_inpt = np.array([np.array(input_pt)])
+    pt_label = np.array([pt_label])
+    masks_np, _, _ = predictor.predict(point_coords=pt_inpt, point_labels=pt_label)
+    if len(masks_np) == 0:
+        return []
+    combined_mask = np.array(np.sum(masks_np, axis=0), dtype=bool)
+    return combined_mask

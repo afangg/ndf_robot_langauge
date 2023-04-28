@@ -11,6 +11,7 @@ import copy
 import meshcat
 import trimesh
 import open3d
+from matplotlib import pyplot as plt
 
 import pyrealsense2 as rs
 
@@ -35,6 +36,60 @@ from rndf_robot.utils.real.polymetis_util import PolymetisHelper
 
 poly_util = PolymetisHelper()
 
+from rndf_robot.system.system_utils.sam_seg import get_mask_from_pt
+from IPython import embed
+
+click_x, click_y = None, None
+def select_pt(image, child=True):
+    global click_x, click_y
+    
+    if child:
+        print('Recorded child mask at')
+    else:
+        print('Recorded parent mask at')
+    def mouse_event(event):
+        global click_x, click_y
+
+        print('x: {} and y: {}'.format(event.xdata, event.ydata))
+        click_x, click_y = event.xdata, event.ydata
+        fig.canvas.mpl_disconnect(cid)
+
+    fig = plt.figure()
+    click_x, click_y = None, None
+    cid = fig.canvas.mpl_connect('button_press_event', mouse_event)
+
+    plt.imshow(image)
+    plt.show()
+    if click_x is None or click_y is None:
+        fig.canvas.mpl_disconnect(cid)
+        return None
+    return np.array([click_x,click_y])
+
+def segment(pcd, top_n=1, eps=0.005, min_points=50, min_z=None):
+    pcd_o3d = open3d.geometry.PointCloud()
+    pcd_o3d.points = open3d.utility.Vector3dVector(pcd)
+    # labels = np.array(pcd_o3d.cluster_dbscan(eps=0.005, min_points=50, print_progress=True))
+    labels = np.array(pcd_o3d.cluster_dbscan(eps=eps, min_points=min_points, print_progress=True))
+    # labels = np.array(pcd_o3d.cluster_dbscan(eps=0.003, min_points=30, print_progress=True))
+
+    clusters_detected = np.unique(labels)
+    pcd_clusters = []
+    cluster_sizes = []
+    for seg_idx in clusters_detected:
+        seg_inds = np.where(labels == seg_idx)[0]
+        # above_table = np.where(proc_pcd[:, 2] > 0.01)
+        # mask = np.logical_and(seg_inds, above_table)
+        cluster = pcd[seg_inds]
+        pcd_clusters.append(cluster)
+        sz = cluster.shape[0]
+        cluster_sizes.append(sz)
+    topNsz = np.argsort(cluster_sizes)[-top_n:]
+
+    clusters = [pcd_clusters[topNsz[i]] for i in range(top_n)]
+    topNclusters = np.concatenate(clusters, axis=0)
+
+    proc_pcd = copy.deepcopy(topNclusters)
+    return proc_pcd
 def main(args):
     #############################################################################
     # generic setup
@@ -260,7 +315,7 @@ def main(args):
 
     # constants for manually cropping the point cloud (simple way to segment the object)
     # cropx, cropy, cropz, crop_note = [0.375, 0.75], [-0.5, 0.5], [0.0075, 0.35], 'table'
-    cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.4, 0.5], [0.01, 0.4], 'table'
+    cropx, cropy, cropz, crop_note = [0.2, 0.7], [-0.4, 0.5], [0.003, 0.4], 'table'
     full_cropx, full_cropy, full_cropz, full_crop_note = [0.0, 0.8], [-0.65, 0.65], [-0.01, 1.0], 'full scene'
 
     print('\n\nBeginning demo iteration %d\n\n' % demo_iteration)
@@ -351,7 +406,7 @@ def main(args):
             depth_imgs = []
             for idx, cam in enumerate(cams.cams):
                 rgb, depth = realsense_interface.get_rgb_and_depth_image(pipelines[idx])
-                rgb_imgs.append(rgb)
+                rgb_imgs.append(rgb)                
                 cam_intrinsics = realsense_interface.get_intrinsics_mat(pipelines[idx])
                 cam.cam_int_mat = cam_intrinsics
                 cam._init_pers_mat()
@@ -380,7 +435,6 @@ def main(args):
                 
                 pcd_pts.append(pcd_world)
                 pcd_dict_list.append(pcd_dict)
-
                 util.meshcat_pcd_show(mc_vis, pcd_world, name=f'scene/pcd_world_cam_{idx}')
 
             full_pcd = np.concatenate(pcd_pts, axis=0)
@@ -388,43 +442,56 @@ def main(args):
             
             # crop the point cloud to the table
             proc_pcd = manually_segment_pcd(full_pcd, x=cropx, y=cropy, z=cropz, note=crop_note)
+            top2clusters = segment(proc_pcd, top_n=2, eps=0.008, min_points=20)
+            util.meshcat_pcd_show(mc_vis, top2clusters, name='scene/top2clusters')
 
-            # pcd_o3d = open3d.geometry.PointCloud()
-            # pcd_o3d.points = open3d.utility.Vector3dVector(proc_pcd)
-            # # labels = np.array(pcd_o3d.cluster_dbscan(eps=0.005, min_points=50, print_progress=True))
-            # # labels = np.array(pcd_o3d.cluster_dbscan(eps=0.008, min_points=20, print_progress=True))
-            # labels = np.array(pcd_o3d.cluster_dbscan(eps=0.003, min_points=30, print_progress=True))
-
-            # clusters_detected = np.unique(labels)
-            # pcd_clusters = []
-            # cluster_sizes = []
-            # for seg_idx in clusters_detected:
-            #     seg_inds = np.where(labels == seg_idx)[0]
-            #     cluster = proc_pcd[seg_inds]
-            #     pcd_clusters.append(cluster)
-            #     sz = cluster.shape[0]
-            #     cluster_sizes.append(sz)
-            # top2sz = np.argsort(cluster_sizes)[-2:]
-
-            # top2clusters = np.concatenate([pcd_clusters[top2sz[0]], pcd_clusters[top2sz[1]]], axis=0)
-            # # util.meshcat_multiple_pcd_show(mc_vis, pcd_clusters)
-            # util.meshcat_pcd_show(mc_vis, top2clusters, name='scene/top2clusters')
-
-            # proc_pcd = copy.deepcopy(top2clusters)
+            proc_pcd = copy.deepcopy(top2clusters)
 
             if args.instance_seg_method == 'hand-label':
                 log_warn('NOT IMPLEMENTED!')
             elif args.instance_seg_method == 'nn':
-                log_warn('NOT IMPLEMENTED!')
+                child_pts = []
+                parent_pts = []
+
+                for idx, _ in enumerate(cams.cams):
+                    rgb = rgb_imgs[idx]
+                    pcd_world_img = pcd_dict_list[idx]['world_img']
+
+                    child_pt = select_pt(rgb, child=True)
+                    if child_pt is not None:
+                        child_mask = get_mask_from_pt(child_pt, image=rgb)
+                        child_partial_pcd = pcd_world_img[child_mask].reshape((-1,3))
+                        child_pts.append(child_partial_pcd)
+
+                    parent_pt = select_pt(rgb, child=False)
+                    if parent_pt is not None:
+                        parent_mask = get_mask_from_pt(parent_pt, image=rgb)
+                        parent_partial_pcd = pcd_world_img[parent_mask].reshape((-1,3))
+                        parent_pts.append(parent_partial_pcd)
+
+                if child_pts != []:
+                    child_pcd = np.concatenate(child_pts, axis=0)
+                    child_pcd =  manually_segment_pcd(child_pcd, x=cropx, y=cropy, z=cropz, note=crop_note)
+                    parent_child_manager.set_child_pointcloud(child_pcd)
+
+                if parent_pt != []:
+                    parent_pcd = np.concatenate(parent_pts, axis=0)
+                    parent_pcd = manually_segment_pcd(parent_pcd, x=cropx, y=cropy, z=cropz, note=crop_note)
+                    parent_child_manager.set_parent_pointcloud(parent_pcd)
+
             else:  # y-axis
                 # get all clusters that are on the positive and negative side of the y-axis
+                top2clusters = segment(proc_pcd, top_n=2, eps=0.008, min_points=20)
+
                 pos_y_proc_pcd = proc_pcd[np.where(proc_pcd[:, 1] > 0.0)[0]]
                 neg_y_proc_pcd = proc_pcd[np.where(proc_pcd[:, 1] < 0.0)[0]]
 
+                parent_pcd = segment(pos_y_proc_pcd, eps=0.003, min_points=20)
+                child_pcd = segment(neg_y_proc_pcd, eps=0.003, min_points=20)
                 # crop each of these point clouds to get the single objects
                 log_info('Segmenting the positive y-axis pcd to PARENT and negative y-axis pcd to CHILD')
-                parent_child_manager.set_parent_pointcloud(pos_y_proc_pcd)
-                parent_child_manager.set_child_pointcloud(neg_y_proc_pcd)
+                parent_child_manager.set_parent_pointcloud(parent_pcd)
+                parent_child_manager.set_child_pointcloud(child_pcd)
 
             log_info('Setting the active object to be the CHILD')
             parent_child_manager.set_active_object('child')
@@ -449,7 +516,7 @@ def main(args):
             continue
         elif user_val == 'em':
             print('\n\nHere in interactive mode\n\n')
-            from IPython import embed; embed()
+            embed()
             continue
         elif user_val == 'n':
             name_user_val = input('\n\nPlease enter a new suffix for the file name\n\n')

@@ -26,7 +26,6 @@ def main(pipeline):
     pipeline.load_models()
 
     ee_poses = pipeline.find_correspondence()
-    embed()
     pipeline.execute(ee_poses)
 
     if pipeline.state == 0:
@@ -85,6 +84,7 @@ if __name__ == "__main__":
 
     pipeline = Pipeline(args)
     pipeline.setup_client()
+    pipeline.setup_table()
     pipeline.setup_cams()
 
     while True:
