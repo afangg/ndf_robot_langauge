@@ -4,14 +4,14 @@ from rndf_robot.utils import util, path_util
 def load_demos_dict():
     all_demos = osp.join(path_util.get_rndf_data(), 'release_real_demos')
     demo_dic = {}
-    for class_pair in os.listdir(all_demos):
-        class_pair_path = osp.join(all_demos, class_pair)
-        for fname in os.listdir(class_pair_path):
-            if not fname.startswith('grasp') and not fname.startswith('place'): continue
-            if not fname.endswith('npz'): continue
-            verb = fname.split('_demo_')[0]
-            demo_path = osp.join(class_pair_path, fname)
-            concept = verb + ' ' + class_pair
+    for demo_type in os.listdir(all_demos):
+        demo_type_folder = osp.join(all_demos, demo_type)
+        for demo_npz in os.listdir(demo_type_folder):
+            if not demo_npz.startswith('grasp') and not demo_npz.startswith('place'): continue
+            if not demo_npz.endswith('npz'): continue
+            verb = demo_npz.split('_demo_')[0]
+            demo_path = osp.join(demo_type_folder, demo_npz)
+            concept = verb + ' ' + demo_type
             if concept not in demo_dic:
                 demo_dic[concept] = []
             demo_dic[concept].append(demo_path)

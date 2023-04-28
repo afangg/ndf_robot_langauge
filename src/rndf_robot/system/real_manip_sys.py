@@ -8,15 +8,14 @@ from IPython import embed;
 def main(pipeline):
     prompt = pipeline.prompt_user()
     if not prompt: 
-        return pipeline.step()
+        pipeline.next_iter()
     corresponding_concept, query_text = prompt
     concept, keywords = pipeline.identify_classes_from_query(query_text, corresponding_concept)
     descriptions = [keyword[1] if keyword[1] else keyword[0] for keyword in keywords]
     labels_to_pcds = pipeline.segment_scene(descriptions)
 
     if not labels_to_pcds:
-        log_warn('WARNING: Target object not detected, resetting the scene')
-        pipeline.reset()
+        log_warn('WARNING: Target object not detected, try again')
         return
     pipeline.assign_pcds(labels_to_pcds)
     
@@ -27,11 +26,7 @@ def main(pipeline):
 
     ee_poses = pipeline.find_correspondence()
     pipeline.execute(ee_poses)
-
-    if pipeline.state == 0:
-        return pipeline.step(obj_grasped=True)
-    else:
-        return pipeline.step()
+    pipeline.next_iter()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -50,7 +45,7 @@ if __name__ == "__main__":
 
     # parser.add_argument('--random', action='store_true', help='utilize random weights')
     parser.add_argument('--non_thin_feature', action='store_true')
-    parser.add_argument('--grasp_dist_thresh', type=float, default=0.0025)
+    parser.add_argument('--grasp_dist_thresh', type=float, default=0.003)
     parser.add_argument('--opt_iterations', type=int, default=500)
 
     parser.add_argument('--relation_method', type=str, default='intersection', help='either "intersection", "ebm"')

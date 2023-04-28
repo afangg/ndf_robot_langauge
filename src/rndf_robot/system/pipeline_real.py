@@ -34,7 +34,7 @@ from rndf_robot.utils.rndf_utils import infer_relation_intersection, create_targ
 from system_utils.segmentation import detect_bbs, apply_pcd_mask, apply_bb_mask, extend_pcds, filter_pcds
 from system_utils.sam_seg import get_masks
 from system_utils.language import chunk_query, create_keyword_dic
-# from system_utils.language import query_correspondance
+from system_utils.language import query_correspondance
 from system_utils.demos import all_demos, get_concept_demos, create_target_desc_subdir, get_model_paths
 import system_utils.objects as objects
 
@@ -85,32 +85,38 @@ class Pipeline():
 
         log_debug('Done with init')
 
-    def reset(self, new_scene=False):
-        if new_scene:
-            time.sleep(1.5)
-
-            self.last_ee = None
-            self.obj_info = {}
-            self.class_to_id = {}
-            self.mc_vis['scene'].delete()
-
-        self.mc_vis['optimizer'].delete()
-        self.ranked_objs = {}
-        if not self.gripper_is_open:
-            self.reset_robot()
-        self.state = -1
-        time.sleep(1.5)
-
-    def step(self, obj_grasped=None):
+    def next_iter(self):
         while True:
-            x = input('Press 1 to continue or 2 to use a new object\n')
-            if x == '1':
-                if not obj_grasped:
-                    self.reset(False)
-                return False
-            elif x == '2':
-                self.reset(True)
-                return True
+            i = input(
+                '''What should we do
+                    [h]: Move to home
+                    [o]: Open gripper
+                    [n]: Continue to next iteration
+                    [em]: Launch interactive mode
+                    [clear]: Clears the env variables
+
+                ''')
+            
+            if i == 'h':
+                self.reset_robot()
+                continue
+            elif i == 'o':
+                self.planning.gripper_open()
+                self.gripper_is_open = True
+            elif i == 'n':
+                break
+            elif i =='em':
+                embed()
+            elif i == 'clear':
+                self.mc_vis['scene'].delete()
+                self.mc_vis['optimizer'].delete()
+                self.ranked_objs = {}     
+                self.state = -1
+                continue
+            else:
+                print('Unknown command')
+                continue
+        torch.cuda.empty_cache()
 
     def setup_client(self):
         #TODO: Setup real robot - hopefully interfacing isn't too different than Pybullet robot
@@ -212,8 +218,8 @@ class Pipeline():
         i = input('Take it home (y/n)?')
         if i == 'y':
             self.planning.execute_loop(current_panda_plan)            
-            self.planning.gripper_open()
-            self.gripper_is_open = True
+            # self.planning.gripper_open()
+            # self.gripper_is_open = True
 
     # def test_execution(self, current_panda_plan):
     #     if len(current_panda_plan) == 0:
@@ -254,8 +260,8 @@ class Pipeline():
         '''
         log_debug('All demo labels: %s' %all_demos.keys())
         while True:
-            # query = self.ask_query()
-            query = "grasp mug_handle", "grab the mug by the handle"
+            query = self.ask_query()
+            # query = "grasp mug_handle", "grab the mug by the handle"
             if not query: return
             corresponding_concept, query_text = query
             demos = get_concept_demos(corresponding_concept)
@@ -269,38 +275,38 @@ class Pipeline():
         self.skill_demos = demos
         if corresponding_concept.startswith('grasp'):
             self.state = 0
-        elif corresponding_concept.startswith('place') and self.state == 0:
+        elif corresponding_concept.startswith('place'):
             self.state = 1
-        elif corresponding_concept.startswith('place') and self.state == -1:
-            self.state = 2
+        # elif corresponding_concept.startswith('place') and self.state == -1:
+        #     self.state = 2
         log_debug('Current State is %s' %self.state)
         return corresponding_concept, query_text
 
-    # def ask_query(self):
-    #     '''
-    #     Prompts the user to input a command and identifies concept
+    def ask_query(self):
+        '''
+        Prompts the user to input a command and identifies concept
 
-    #     return: the concept most similar to their query and their input text
-    #     '''
-    #     concepts = list(all_demos.keys())
-    #     while True:
-    #         query_text = input('Please enter a query or \'reset\' to reset the scene\n')
-    #         if not query_text: continue
-    #         if query_text.lower() == "reset": return
-    #         ranked_concepts = query_correspondance(concepts, query_text)
-    #         corresponding_concept = None
-    #         for concept in ranked_concepts:
-    #             print('Corresponding concept:', concept)
-    #             correct = input('Corrent concept? (y/n)\n')
-    #             if correct == 'n':
-    #                 continue
-    #             elif correct == 'y':
-    #                 corresponding_concept = concept
-    #                 break
+        return: the concept most similar to their query and their input text
+        '''
+        concepts = list(all_demos.keys())
+        while True:
+            query_text = input('Please enter a query or \'reset\' to reset the scene\n')
+            if not query_text: continue
+            if query_text.lower() == "reset": return
+            ranked_concepts = query_correspondance(concepts, query_text)
+            corresponding_concept = None
+            for concept in ranked_concepts:
+                print('Corresponding concept:', concept)
+                correct = input('Corrent concept? (y/n)\n')
+                if correct == 'n':
+                    continue
+                elif correct == 'y':
+                    corresponding_concept = concept
+                    break
             
-    #         if corresponding_concept:
-    #             break
-    #     return corresponding_concept, query_text
+            if corresponding_concept:
+                break
+        return corresponding_concept, query_text
 
 
     def identify_classes_from_query(self, query, corresponding_concept):
@@ -319,6 +325,7 @@ class Pipeline():
         chunked_query = chunk_query(query)
         keywords = create_keyword_dic(relevant_classes, chunked_query)
         self.assign_classes(keywords)
+        torch.cuda.empty_cache()
         return concept_key, keywords
 
     def assign_classes(self, keywords):
@@ -326,7 +333,7 @@ class Pipeline():
         @test_objs: list of relevant object classes to determine rank for
         @keywords: list of associated obj class, noun phrase, and verb flag as pairs of tuples in form (class, NP, True/False)
         '''
-
+        embed()
         # what's the best way to determine which object should be manipulated and which is stationary automatically?
         if self.state == 0:
             # only one noun phrase mentioned, probably the object to be moved
@@ -335,27 +342,23 @@ class Pipeline():
             self.ranked_objs[0]['description'] = keyword[1]
             self.ranked_objs[0]['potential_class'] = keyword[0]
         else:
-            if self.state == 1:
-                if len(keywords) >= 1:
-                    for pair in keywords:
+            if self.state == 1 and 0 in self.ranked_objs:
+                old_keywords = keywords.copy()
+                keywords = []
+                if len(old_keywords) >= 1:
+                    for pair in old_keywords:
                         # check if the obj class mentioned in noun phrase same as object to be moved
-                        if pair[0] == self.ranked_objs[0]['potential_class']:
-                            keywords.remove(pair)   
-                if len(keywords) == 0:
-                    return
-                else:
-                    if len(keywords) > 1:
-                        log_warn('There is more than one noun mentioned in the query, just choosing one')
+                        if pair[0] != self.ranked_objs[0]['potential_class']:
+                            keywords.append(pair)   
 
-                    priority_rank = 0 if 0 not in self.ranked_objs else 1
-                    keyword = keywords.pop()
-                    self.ranked_objs[priority_rank] = {}
-                    self.ranked_objs[priority_rank]['description'] = keyword[1]
-                    self.ranked_objs[priority_rank]['potential_class'] = keyword[0]
+            if len(keywords) == 1:
+                priority_rank = 0 if 0 not in self.ranked_objs else 1
+                keyword = keywords.pop()
+                self.ranked_objs[priority_rank] = {}
+                self.ranked_objs[priority_rank]['description'] = keyword[1]
+                self.ranked_objs[priority_rank]['potential_class'] = keyword[0]
             else:
-                if self.state != 2 and len(keywords) > 1:
-                    log_warn('There is more than one noun mentioned in the query and unsure what to do')
-                    return
+                log_warn('There is still more than one noun mentioned in the query')
                 if len(keywords) == 2:
                     pair_1, pair_2 = keywords
                     if pair_1[2]:
@@ -485,8 +488,8 @@ class Pipeline():
         pcd_world_img = pcd_world.reshape(depth.shape[0], depth.shape[1], 3)
     
         cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.4, 0.0], [0.01, 0.35], 'table_right'
-        proc_pcd = manually_segment_pcd(pcd_world, x=cropx, y=cropy, z=cropz, note=crop_note)
-
+        # proc_pcd = manually_segment_pcd(pcd_world, x=cropx, y=cropy, z=cropz, note=crop_note)
+        proc_pcd = pcd_world
         util.meshcat_pcd_show(self.mc_vis, proc_pcd, name=f'scene/pcd_world_cam_{idx}')
 
         return pcd_world_img, depth_valid
@@ -505,7 +508,7 @@ class Pipeline():
         label_to_pcds = {}
         label_to_scores = {}
         centroid_thresh = 0.1
-        detect_thresh = 0.2
+        detect_thresh = 0.07
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
             rgb, depth = self.cam_interface.get_rgb_and_depth_image(self.pipelines[i])
@@ -636,7 +639,7 @@ class Pipeline():
                 self.ranked_objs[obj_rank]['demo_start_pcds'].append(s_pcd)
                 self.ranked_objs[obj_rank]['demo_final_pcds'].append(f_pcd)
                 
-        demo_path = osp.join(path_util.get_rndf_data(), 'release_demos', concept)
+        demo_path = osp.join(path_util.get_rndf_data(), 'release_real_demos', concept)
         relational_model_path, target_model_path = self.ranked_objs[1]['model_path'], self.ranked_objs[0]['model_path']
         target_desc_subdir = create_target_desc_subdir(demo_path, relational_model_path, target_model_path, create=False)
         target_desc_fname = osp.join(demo_path, target_desc_subdir, 'target_descriptors.npz')
@@ -709,7 +712,7 @@ class Pipeline():
             if not relational_model_path:
                 relational_model_path = 'ndf_vnn/rndf_weights/ndf_'+relational_class+'.pth'
 
-            demo_path = osp.join(path_util.get_rndf_data(), 'release_demos', concept)
+            demo_path = osp.join(path_util.get_rndf_data(), 'release_real_demos', concept)
             target_desc_subdir = create_target_desc_subdir(demo_path, relational_model_path, target_model_path, create=False)
             target_desc_fname = osp.join(demo_path, target_desc_subdir, 'target_descriptors.npz')
             if not osp.exists(target_desc_fname):
@@ -773,11 +776,11 @@ class Pipeline():
         pre_pre_ee_pose = util.pose_stamped2list(
             util.transform_pose(pose_source=util.list2pose_stamped(pre_ee_pose), pose_transform=util.list2pose_stamped(pre_ee_offset_tf)))
 
-        ee_poses.append(pre_pre_ee_pose)
+        # ee_poses.append(pre_pre_ee_pose)
         ee_poses.append(pre_ee_pose)
         return ee_poses
     
-    def find_place_transform(self, target_rank, relational_rank=None, ee=False):
+    def find_place_transform(self, target_rank, relational_rank=None, ee=None):
         #placement
         log_debug('Solve for placement coorespondance')
         optimizer = self.ranked_objs[target_rank]['optimizer']
@@ -800,7 +803,7 @@ class Pipeline():
             final_pose_mat = pose_mats[best_idx]
         final_pose = util.pose_from_matrix(final_pose_mat)
 
-        if ee:
+        if ee is not None:
             ee_end_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee), pose_transform=final_pose)
             preplace_offset_tf = util.list2pose_stamped(self.cfg.PREPLACE_OFFSET_TF)
             # preplace_direction_tf = util.list2pose_stamped(self.cfg.PREPLACE_HORIZONTAL_OFFSET_TF)
@@ -916,8 +919,8 @@ class Pipeline():
             release = input('Press o to open end effector or Enter to continue')
             if release == 'o':
                 self.planning.gripper_open()
+                self.gripper_is_open = True
                 self.state = -1
-
                 time.sleep(1.0)
             else:
                 self.state = 0
