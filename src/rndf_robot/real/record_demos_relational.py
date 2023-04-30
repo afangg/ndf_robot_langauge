@@ -36,7 +36,7 @@ from rndf_robot.utils.real.polymetis_util import PolymetisHelper
 
 poly_util = PolymetisHelper()
 
-from rndf_robot.system.system_utils.sam_seg import get_mask_from_pt
+from rndf_robot.system.system_utils.SAM import get_mask_from_pt
 from IPython import embed
 
 click_x, click_y = None, None

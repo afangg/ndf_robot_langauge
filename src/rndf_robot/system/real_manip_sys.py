@@ -57,7 +57,7 @@ if __name__ == "__main__":
 
     # parser.add_argument('--random', action='store_true', help='utilize random weights')
     parser.add_argument('--non_thin_feature', action='store_true')
-    parser.add_argument('--grasp_dist_thresh', type=float, default=0.003)
+    parser.add_argument('--grasp_dist_thresh', type=float, default=0.0025)
     parser.add_argument('--opt_iterations', type=int, default=500)
 
     parser.add_argument('--relation_method', type=str, default='intersection', help='either "intersection", "ebm"')

@@ -104,34 +104,3 @@ class DefaultQueryPoints:
 
     def clear_custom_query_points(self):
         self.custom_query_points = None
-
-
-def manually_segment_pcd(full_pcd, x, y, z, note='default', mean_inliers=False, downsample=False, show=False):
-
-    pcd_proc_debug_str1 = f'[manually_segment_pcd] Cropping info: {note}, boundary params: '
-    pcd_proc_debug_str2 = f'x: [{x[0]}, {x[1]}], y: [{y[0]}, {y[1]}], z: [{z[0]}, {z[1]}]' 
-    print(pcd_proc_debug_str1 + pcd_proc_debug_str2)
-
-    crop_pcd = util.crop_pcd(full_pcd, x=x, y=y, z=z)
-    
-    if mean_inliers:
-        pcd_mean = np.mean(crop_pcd, axis=0)
-        inliers = np.where(np.linalg.norm(crop_pcd - pcd_mean, 2, 1) < 0.2)[0]
-        crop_pcd = crop_pcd[inliers]
-    
-    if downsample:
-        perm = np.random.permutation(crop_pcd.shape[0])
-        size = int(crop_pcd.shape[0])
-        crop_pcd = crop_pcd[perm[:size]]
-
-    # plot3d(
-        # [crop_pcd], 
-        # fname=osp.join(pcd_save_dir, save_fname), 
-        # auto_scene=False,
-        # scene_dict=plotly_scene_dict,
-        # z_plane=False)
-
-    if show:
-        trimesh_util.trimesh_show([crop_pcd])
-
-    return crop_pcd

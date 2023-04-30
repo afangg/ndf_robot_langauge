@@ -12,3 +12,5 @@ log.txt
 **/real_demo_data
 **.html
 **.jpg
+.DS_Store
+.vscode

@@ -96,12 +96,8 @@ if __name__ == "__main__":
 
     pipeline = Pipeline(args)
     pipeline.setup_client()
-
-    server = VizServer(pipeline.robot.pb_client, port_vis=6000)
-    pipeline.register_vizServer(server)
-
     pipeline.setup_table()
-    pipeline.reset_robot()
-    log_info('Loaded new table')
+    pipeline.setup_cams()
+
     while True:
         generate_new_scene = main(pipeline, generate_new_scene)

@@ -32,18 +32,16 @@ from rndf_robot.utils.pipeline_util import (
 )
 
 from rndf_robot.utils.rndf_utils import infer_relation_intersection, create_target_descriptors
-from system_utils.segmentation import detect_bbs, apply_pcd_mask, apply_bb_mask, extend_pcds, filter_pcds
-from system_utils.sam_seg import get_masks, get_mask_from_bb, get_mask_from_pt, Annotate
 from system_utils.language import chunk_query, create_keyword_dic
 from system_utils.language import query_correspondance
 from system_utils.demos import all_demos, get_concept_demos, create_target_desc_subdir, get_model_paths
 import system_utils.objects as objects
 
 from rndf_robot.utils.visualize import PandaHand, Robotiq2F140Hand
-from rndf_robot.utils.record_demo_utils import manually_segment_pcd
+from rndf_robot.segmentation.pcd_utils import filter_pcds, pcds_from_masks, extend_pcds
 
 from rndf_robot.utils.franka_ik import FrankaIK #, PbPlUtils
-from rndf_robot.robot.simple_multicam import MultiRealsenseLocal
+from rndf_robot.cameras.simple_multicam import MultiRealsenseLocal
 
 from rndf_robot.config.default_multi_realsense_cfg import get_default_multi_realsense_cfg
 from rndf_robot.utils.real.traj_util import PolymetisTrajectoryUtil
@@ -51,8 +49,8 @@ from rndf_robot.utils.real.plan_exec_util import PlanningHelper
 from rndf_robot.utils.real.perception_util import enable_devices
 from rndf_robot.utils.real.polymetis_util import PolymetisHelper
 
-from rndf_robot.robot.simple_multicam import MultiRealsenseLocal
-from rndf_robot.system.system_utils.realsense import RealsenseLocal, enable_devices, pipeline_stop
+from rndf_robot.cameras.simple_multicam import MultiRealsenseLocal
+from rndf_robot.cameras.realsense import RealsenseLocal, enable_devices, pipeline_stop
 
 from IPython import embed;
 
@@ -75,17 +73,19 @@ class Pipeline():
         random.seed(self.args.seed)
         np.random.seed(self.args.seed)
 
-        if args.debug:
-            set_log_level('debug')
-        else:
-            set_log_level('info')
-        
         self.mc_vis = meshcat.Visualizer(zmq_url=f'tcp://127.0.0.1:{self.args.port_vis}')
         self.mc_vis['scene'].delete()
         self.mc_vis['optimizer'].delete()
         self.mc_vis['ee'].delete()
 
-        log_debug('Done with init')
+        random.seed(self.args.seed)
+        np.random.seed(self.args.seed)
+
+        if args.debug:
+            set_log_level('debug')
+        else:
+            set_log_level('info')
+
 
     def next_iter(self):
         while True:
@@ -163,17 +163,6 @@ class Pipeline():
             planning.gripper_open()
             self.gripper_is_open = True
 
-        # if self.args.gripper_type == '2f140':
-        #     grasp_pose_viz = Robotiq2F140Hand(grasp_frame=False)
-        #     place_pose_viz = Robotiq2F140Hand(grasp_frame=False)
-        # else:
-        #     grasp_pose_viz = PandaHand(grasp_frame=True)
-        #     place_pose_viz = PandaHand(grasp_frame=True)
-        # grasp_pose_viz.reset_pose()
-        # place_pose_viz.reset_pose()
-        # grasp_pose_viz.meshcat_show(self.mc_vis, name_prefix='grasp_pose')
-        # place_pose_viz.meshcat_show(self.mc_vis, name_prefix='place_pose')
-
         self.planning = planning
         self.panda = panda
 
@@ -233,17 +222,7 @@ class Pipeline():
         i = input('Take it home (y/n)?')
         if i == 'y':
             self.planning.execute_loop(current_panda_plan)            
-            # self.planning.gripper_open()
-            # self.gripper_is_open = True
-
-    # def test_execution(self, current_panda_plan):
-    #     if len(current_panda_plan) == 0:
-    #         print('\n\nCurrent panda plan is empty!')
-
-    #     self.planning.execute_pb_loop(current_panda_plan)
-    #     confirm = input('Confirm execution (y/n)' )
-    #     if confirm == 'y':
-    #         self.planning.execute_loop(current_panda_plan)            
+         
 
     #################################################################################################
     # Loading config settings and files
@@ -580,9 +559,9 @@ class Pipeline():
 
             for obj_label, obj_masks in all_obj_masks.items():
                 log_debug(f'Region count for {obj_label}: {len(obj_masks)}')
-                obj_pcds, obj_scores = apply_pcd_mask(pcd_2d, valid, obj_masks, all_obj_bb_scores[obj_label])
+                obj_pcds, obj_scores = pcds_from_masks(pcd_2d, valid, obj_masks, all_obj_bb_scores[obj_label], is_bbox=False)
                 log_debug(f'{obj_label} after filtering is now {len(obj_pcds)}')
-                obj_pcds, obj_scores = filter_pcds(obj_pcds, obj_scores)
+                obj_pcds, obj_scores = filter_pcds(obj_pcds, obj_scores, mean_inliers=True)
                 for j in range(len(obj_pcds)):
                     util.meshcat_pcd_show(self.mc_vis, obj_pcds[j], color=(0, 255, 0), name=f'scene/cam_{i}_{obj_label}_region_{j}')
 
@@ -609,16 +588,10 @@ class Pipeline():
                 break
             obj_pcd_sets = label_to_pcds[obj_label]
             for i, target_obj_pcd_obs in enumerate(obj_pcd_sets):
-                # target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
-                # inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
-                # target_obj_pcd_obs = target_obj_pcd_obs[inliers]
-                # if not target_obj_pcd_obs.any(): continue
                 score = np.average(label_to_scores[obj_label][i])
                 if obj_label not in pcds_output:
                     pcds_output[obj_label] = []
                 pcds_output[obj_label].append((score, target_obj_pcd_obs))
-                # if self.args.debug:
-                #     trimesh_util.trimesh_show([target_obj_pcd_obs])
         return pcds_output        
 
     #################################################################################################
@@ -657,17 +630,11 @@ class Pipeline():
                 self.ranked_objs[0]['demo_ids'].append(obj_id)
             else:
                 log_debug('Could not load demo')
-
-        # if self.relevant_objs['grasped']:
-        #     scene = trimesh_util.trimesh_show([target_info['demo_obj_pts'],target_info['demo_query_pts_real_shape']], show=True)
-
         self.ranked_objs[0]['query_pts'] = process_xq_data(demo, table_obj=self.table_obj)
         self.ranked_objs[0]['query_pts_rs'] = process_xq_rs_data(demo, table_obj=self.table_obj)
         self.ranked_objs[0]['demo_ids'] = frozenset(self.ranked_objs[0]['demo_ids'])
         log_debug('Finished loading single descriptors')
         return True
-
-        # self.initial_poses = initial_poses
 
     def get_relational_descriptors(self, concept, n=None):
         for obj_rank in self.ranked_objs.keys():
@@ -874,7 +841,7 @@ class Pipeline():
             pre_ee_end_pose2 = util.transform_pose(pose_source=ee_end_pose, pose_transform=preplace_offset_tf)
             pre_ee_end_pose1 = util.transform_pose(pose_source=pre_ee_end_pose2, pose_transform=preplace_direction_tf)        
 
-                # get pose that's straight up
+            # get pose that's straight up
             current_ee_pose = poly_util.polypose2np(self.panda.get_ee_pose())
             offset_pose = util.transform_pose(
                 pose_source=util.list2pose_stamped(current_ee_pose),
