@@ -10,6 +10,7 @@ import trimesh
 import open3d
 import pyrealsense2 as rs
 from polymetis import GripperInterface, RobotInterface
+from matplotlib import pyplot as plt
 
 from airobot import log_info, log_warn, log_debug, log_critical, set_log_level
 
@@ -32,7 +33,7 @@ from rndf_robot.utils.pipeline_util import (
 
 from rndf_robot.utils.rndf_utils import infer_relation_intersection, create_target_descriptors
 from system_utils.segmentation import detect_bbs, apply_pcd_mask, apply_bb_mask, extend_pcds, filter_pcds
-from system_utils.sam_seg import get_masks
+from system_utils.sam_seg import get_masks, get_mask_from_bb, get_mask_from_pt, Annotate
 from system_utils.language import chunk_query, create_keyword_dic
 from system_utils.language import query_correspondance
 from system_utils.demos import all_demos, get_concept_demos, create_target_desc_subdir, get_model_paths
@@ -82,6 +83,7 @@ class Pipeline():
         self.mc_vis = meshcat.Visualizer(zmq_url=f'tcp://127.0.0.1:{self.args.port_vis}')
         self.mc_vis['scene'].delete()
         self.mc_vis['optimizer'].delete()
+        self.mc_vis['ee'].delete()
 
         log_debug('Done with init')
 
@@ -92,8 +94,10 @@ class Pipeline():
                     [h]: Move to home
                     [o]: Open gripper
                     [n]: Continue to next iteration
+                    [i] to set into low stiffness mode
+                    [l] to lock into current configuration with high stiffness
                     [em]: Launch interactive mode
-                    [clear]: Clears the env variables
+                    [clear]: Clears the env variables - will segment everything again
 
                 ''')
             
@@ -104,12 +108,23 @@ class Pipeline():
                 self.planning.gripper_open()
                 self.gripper_is_open = True
             elif i == 'n':
+                self.mc_vis['scene'].delete()
+                self.mc_vis['optimizer'].delete()
+                self.mc_vis['ee'].delete()
                 break
+            elif i == 'i':
+                print('\n\nSetting low stiffness in current pose, you can now move the robot')
+                # panda.set_cart_impedance_pose(panda.endpoint_pose(), stiffness=[0]*6)
+                self.panda.start_cartesian_impedance(Kx=torch.zeros(6), Kxd=torch.zeros(6))
+                continue
+            elif i == 'l':
+                print('\n\nSetting joint positions to current value\n\n')
+                self.panda.start_joint_impedance()
+                # panda.start_joint_impedance(Kq=Kq_new, Kqd=Kqd_new)
+                continue
             elif i =='em':
                 embed()
             elif i == 'clear':
-                self.mc_vis['scene'].delete()
-                self.mc_vis['optimizer'].delete()
                 self.ranked_objs = {}     
                 self.state = -1
                 continue
@@ -325,7 +340,6 @@ class Pipeline():
         chunked_query = chunk_query(query)
         keywords = create_keyword_dic(relevant_classes, chunked_query)
         self.assign_classes(keywords)
-        torch.cuda.empty_cache()
         return concept_key, keywords
 
     def assign_classes(self, keywords):
@@ -333,7 +347,6 @@ class Pipeline():
         @test_objs: list of relevant object classes to determine rank for
         @keywords: list of associated obj class, noun phrase, and verb flag as pairs of tuples in form (class, NP, True/False)
         '''
-        embed()
         # what's the best way to determine which object should be manipulated and which is stationary automatically?
         if self.state == 0:
             # only one noun phrase mentioned, probably the object to be moved
@@ -366,7 +379,9 @@ class Pipeline():
                     elif pair_2[2]:
                         classes_to_assign = [pair_2, pair_1]
                     else:
-                        log_warn("Unsure which object to act on")
+                        log_warn("Unsure which object to act on, just going in order of prompt")
+                        classes_to_assign = [pair_2, pair_1]
+
                 else:
                     classes_to_assign = keywords
                 for i in range(len(classes_to_assign)):
@@ -394,7 +409,7 @@ class Pipeline():
             labels_to_pcds[label].sort(key=lambda x: x[0])
 
         for obj_rank in self.ranked_objs:
-            if 'pcd' in self.ranked_objs[obj_rank]: continue
+            # if 'pcd' in self.ranked_objs[obj_rank]: continue
             description = self.ranked_objs[obj_rank]['description']
             obj_class = self.ranked_objs[obj_rank]['potential_class']
 
@@ -465,7 +480,6 @@ class Pipeline():
             pcd_dict_list.append(pcd_dict)
         pcd_full = np.concatenate(pcd_pts, axis=0)
         # util.meshcat_pcd_show(self.mc_vis, pcd_full, color=(0, 255, 0), name='scene/full_scene')
-        torch.cuda.empty_cache()
         return pcd_full, rgb_imgs
     
 
@@ -488,8 +502,8 @@ class Pipeline():
         pcd_world_img = pcd_world.reshape(depth.shape[0], depth.shape[1], 3)
     
         cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.4, 0.0], [0.01, 0.35], 'table_right'
-        # proc_pcd = manually_segment_pcd(pcd_world, x=cropx, y=cropy, z=cropz, note=crop_note)
-        proc_pcd = pcd_world
+        proc_pcd = manually_segment_pcd(pcd_world, x=cropx, y=cropy, z=cropz, note=crop_note)
+        # proc_pcd = pcd_world
         util.meshcat_pcd_show(self.mc_vis, proc_pcd, name=f'scene/pcd_world_cam_{idx}')
 
         return pcd_world_img, depth_valid
@@ -504,28 +518,69 @@ class Pipeline():
             for obj_rank in self.ranked_objs:
                 if 'pcd' not in self.ranked_objs[obj_rank]:
                     captions.append(self.ranked_objs[obj_rank]['description'])
-                    
-        label_to_pcds = {}
-        label_to_scores = {}
-        centroid_thresh = 0.1
-        detect_thresh = 0.07
+        
+        rgb_imgs = []
+        pcds_2d = []
+        valid_depths = []
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
             rgb, depth = self.cam_interface.get_rgb_and_depth_image(self.pipelines[i])
-            pts_2d, depth_valid = self.get_real_pcd_cam(i, rgb, depth)
-            all_obj_bbs, all_obj_bb_scores = detect_bbs(rgb, 
-                                                        captions, 
-                                                        max_count=1, 
-                                                        score_threshold=detect_thresh)
-            log_debug(f'Detected the following captions {all_obj_bb_scores.keys()}')
+            pts_2d, valid = self.get_real_pcd_cam(i, rgb, depth)
+            rgb_imgs.append(rgb)
+            pcds_2d.append(pts_2d)
+            valid_depths.append(valid)
 
-            if not all_obj_bbs:
-                continue
-            all_obj_masks = get_masks(rgb, all_obj_bbs)
-            # all_obj_masks = all_obj_bbs
+        label_to_pcds = {}
+        label_to_scores = {}
+        centroid_thresh = 0.1
+        detect_thresh = 0.15
+        for i, rgb, pcd_2d, valid in zip(range(len(rgb)), rgb_imgs, pcds_2d, valid_depths):
+            # Object Detection
+            # all_obj_bbs, all_obj_bb_scores = detect_bbs(rgb, 
+            #                                             captions, 
+            #                                             max_count=1, 
+            #                                             score_threshold=detect_thresh)
+            # log_debug(f'Detected the following captions {all_obj_bb_scores.keys()}')
+
+            # if not all_obj_bbs:
+            #     continue
+            # all_obj_masks = get_masks(rgb, all_obj_bbs)
+
+            # all_obj_masks = {}
+            # all_obj_bb_scores = {}
+            # for caption in captions:
+            #     selected_pt = a.select_pt(rgb, f'Select {caption} in scene')
+            #     if selected_pt is not None:
+            #         mask = get_mask_from_pt(selected_pt, image=rgb, show=True)
+            #         # partial_pcd = pts_2d[mask].reshape((-1,3))
+            #         if caption not in all_obj_masks:
+            #             all_obj_masks[caption] = []
+            #             all_obj_bb_scores[caption] = []
+
+            #         all_obj_masks[caption].append(mask)
+            #         all_obj_bb_scores[caption].append([1.0])
+
+            all_obj_masks = {}
+            all_obj_bb_scores = {}
+
+            for caption in captions:
+                a = Annotate()
+
+                selected_bb = a.select_bb(rgb, f'Select {caption} in scene')
+                if selected_bb is not None:
+                    mask = get_mask_from_bb(selected_bb, image=rgb, show=False)
+                    # partial_pcd = pts_2d[mask].reshape((-1,3))
+                    if caption not in all_obj_masks:
+                        all_obj_masks[caption] = []
+                        all_obj_bb_scores[caption] = []
+
+                    all_obj_masks[caption].append(mask)
+                    all_obj_bb_scores[caption].append([1.0])
+
+
             for obj_label, obj_masks in all_obj_masks.items():
                 log_debug(f'Region count for {obj_label}: {len(obj_masks)}')
-                obj_pcds, obj_scores = apply_pcd_mask(pts_2d, depth_valid, obj_masks, all_obj_bb_scores[obj_label])
+                obj_pcds, obj_scores = apply_pcd_mask(pcd_2d, valid, obj_masks, all_obj_bb_scores[obj_label])
                 log_debug(f'{obj_label} after filtering is now {len(obj_pcds)}')
                 obj_pcds, obj_scores = filter_pcds(obj_pcds, obj_scores)
                 for j in range(len(obj_pcds)):
@@ -758,6 +813,12 @@ class Pipeline():
             ee_poses = self.find_place_transform(0, relational_rank=relational_rank, ee=current_ee_pose)
         elif self.state == 2:
             ee_poses = self.find_place_transform(0, relational_rank=relational_rank)
+
+        ee_file = osp.join(path_util.get_rndf_descriptions(), 'franka_panda/meshes/robotiq_2f140/full_hand_2f140.obj')
+        for i, ee_pose in enumerate(ee_poses):
+            pose = util.body_world_yaw(util.list2pose_stamped(ee_pose), theta=-1.5708)
+            pose = util.matrix_from_pose(pose)
+            util.meshcat_obj_show(self.mc_vis, ee_file, pose, 1.0, name=f'ee/ee_{i}')
         return ee_poses
 
     def find_pick_transform(self, target_rank):
@@ -820,8 +881,8 @@ class Pipeline():
                 pose_transform=util.list2pose_stamped([0, 0, 0.15, 0, 0, 0, 1])
             )
             ee_poses.append(util.pose_stamped2list(offset_pose)) 
-            ee_poses.append(util.pose_stamped2list(pre_ee_end_pose1))
-            ee_poses.append(util.pose_stamped2list(pre_ee_end_pose2))
+            # ee_poses.append(util.pose_stamped2list(pre_ee_end_pose1))
+            # ee_poses.append(util.pose_stamped2list(pre_ee_end_pose2))
             ee_poses.append(util.pose_stamped2list(ee_end_pose))
         else:
             ee_poses.append(util.pose_stamped2list(final_pose))

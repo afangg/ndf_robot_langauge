@@ -1,10 +1,57 @@
-import torch
+from copy import copy
 import numpy as np
-import cv2
+import time
 import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+
 from segment_anything import build_sam, sam_model_registry, SamPredictor
 from huggingface_hub import hf_hub_download
 from IPython import embed
+
+class Annotate(object):
+    def __init__(self):
+        self.fig, self.ax = plt.subplots()
+        self.rect = Rectangle((0,0), 1, 1)
+        self.x0 = None
+        self.y0 = None
+        self.x1 = None
+        self.y1 = None
+
+    def on_press(self, event):
+        self.x0 = event.xdata
+        self.y0 = event.ydata
+
+    def on_release_draw(self, event):
+        self.x1 = event.xdata
+        self.y1 = event.ydata
+        self.rect.set_width(self.x1 - self.x0)
+        self.rect.set_height(self.y1 - self.y0)
+        self.rect.set_xy((self.x0, self.y0))
+        self.fig.canvas.draw()
+        time.sleep(0.3)
+        plt.close()
+
+    def select_bb(self, image, message):
+        print(f'{message}')
+        self.ax.add_patch(self.rect)
+        cid_press = self.fig.canvas.mpl_connect('button_press_event', self.on_press)
+        cid_release = self.fig.canvas.mpl_connect('button_release_event', self.on_release_draw)
+        self.ax.imshow(image)
+        plt.show(block=True)
+        self.fig.canvas.mpl_disconnect(cid_press)
+        self.fig.canvas.mpl_disconnect(cid_release)
+        return np.array([self.x0, self.y0, self.x1, self.y1])
+
+    def select_pt(self, image, message):
+        print(f'{message}')
+        cid = self.fig.canvas.mpl_connect('button_release_event', self.on_press)
+        self.ax.imshow(image)
+        plt.show(block=True)
+        self.fig.canvas.mpl_disconnect(cid)
+        plt.close()
+        return np.array([self.x0, self.y0])
+
+
 
 def show_mask(mask, ax):
     color = np.array([30/255, 144/255, 255/255, 0.6])
@@ -47,7 +94,7 @@ def get_masks(image, all_obj_bbs):
 
     return all_obj_masks
 
-def get_mask_from_bb(bb, image=None,):
+def get_mask_from_bb(bb, image=None, show=False):
     if image is not None:
         predictor.set_image(image)
 
@@ -56,9 +103,11 @@ def get_mask_from_bb(bb, image=None,):
     if len(masks_np) == 0:
         return []
     combined_mask = np.array(np.sum(masks_np, axis=0), dtype=bool)
+    if show:
+        show_mask(combined_mask, plt)
     return combined_mask
 
-def get_mask_from_pt(input_pt, pt_label=1, image=None,):
+def get_mask_from_pt(input_pt, pt_label=1, image=None, show=False):
     if image is not None:
         predictor.set_image(image)
 
@@ -68,4 +117,6 @@ def get_mask_from_pt(input_pt, pt_label=1, image=None,):
     if len(masks_np) == 0:
         return []
     combined_mask = np.array(np.sum(masks_np, axis=0), dtype=bool)
+    if show:
+        show_mask(combined_mask, plt)
     return combined_mask

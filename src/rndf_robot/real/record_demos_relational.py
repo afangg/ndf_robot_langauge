@@ -315,7 +315,7 @@ def main(args):
 
     # constants for manually cropping the point cloud (simple way to segment the object)
     # cropx, cropy, cropz, crop_note = [0.375, 0.75], [-0.5, 0.5], [0.0075, 0.35], 'table'
-    cropx, cropy, cropz, crop_note = [0.2, 0.7], [-0.4, 0.5], [0.003, 0.4], 'table'
+    cropx, cropy, cropz, crop_note = [0.2, 0.7], [-0.45, 0.5], [0.003, 0.4], 'table'
     full_cropx, full_cropy, full_cropz, full_crop_note = [0.0, 0.8], [-0.65, 0.65], [-0.01, 1.0], 'full scene'
 
     print('\n\nBeginning demo iteration %d\n\n' % demo_iteration)
@@ -370,10 +370,10 @@ def main(args):
 
         if full_scene_pcd is not None:
             util.meshcat_pcd_show(mc_vis, full_scene_pcd, color=[128, 128, 128], name='scene/full_scene_pcd')
-        if proc_pcd is not None:
-            util.meshcat_pcd_show(mc_vis, proc_pcd, color=[255, 0, 0], name='scene/observed_object_pcd')
-        if proc_pcd_place is not None:
-            util.meshcat_pcd_show(mc_vis, proc_pcd_place, color=[255, 0, 255], name='scene/placed_object_pcd')
+        # if proc_pcd is not None:
+        #     util.meshcat_pcd_show(mc_vis, proc_pcd, color=[255, 0, 0], name='scene/observed_object_pcd')
+        # if proc_pcd_place is not None:
+        #     util.meshcat_pcd_show(mc_vis, proc_pcd_place, color=[255, 0, 255], name='scene/placed_object_pcd')
 
         parent_child_manager.visualize_current_state()
         user_val = input(
@@ -390,6 +390,8 @@ def main(args):
                 [h] to go home
                 [e] to execute currently stored plan
                 [s] to save the currently stored grasps
+                [s] to save the currently stored grasps
+                [sm] to save the multi object pose
                 [n] to enter a new save file suffix
                 [em] to enter an interactive python terminal
                 [q] to record a set of query points located at the current end effector pose
@@ -469,12 +471,13 @@ def main(args):
                         parent_partial_pcd = pcd_world_img[parent_mask].reshape((-1,3))
                         parent_pts.append(parent_partial_pcd)
 
-                if child_pts != []:
+                if len(child_pts) > 0:
                     child_pcd = np.concatenate(child_pts, axis=0)
                     child_pcd =  manually_segment_pcd(child_pcd, x=cropx, y=cropy, z=cropz, note=crop_note)
+                    # child_pcd = segment(child_pcd, top_n=1, eps=0.008, min_points=20)
                     parent_child_manager.set_child_pointcloud(child_pcd)
 
-                if parent_pt != []:
+                if len(parent_pts) > 0:
                     parent_pcd = np.concatenate(parent_pts, axis=0)
                     parent_pcd = manually_segment_pcd(parent_pcd, x=cropx, y=cropy, z=cropz, note=crop_note)
                     parent_child_manager.set_parent_pointcloud(parent_pcd)
@@ -655,6 +658,39 @@ def main(args):
             save_file_path = osp.join(demo_save_dir, args.exp + '_' + save_file_suffix)
             print('\n\nSaving data to path: %s\n\n' % save_file_path)
 
+            ### save in the same format as our simulated demos
+            grasp_save_path = '/'.join(save_file_path.split('/')[:-1] + ['grasp_demo_' + save_file_path.split('/')[-1]])
+
+            # unused dummy variables for compatibility with simulated demos
+            shapenet_id = None
+
+            gripper_contact_pose = current_grasp_pose
+            np.savez(
+                grasp_save_path,
+                shapenet_id=shapenet_id,
+                ee_pose_world=np.asarray(gripper_contact_pose),  # TODO see if this works okay, or if we want to record where the grasp target was
+                robot_joints=np.asarray(current_grasp_joints),
+                obj_pose_world=np.asarray(util.pose_stamped2list(util.unit_pose())),
+                obj_pose_camera=np.asarray(util.pose_stamped2list(util.unit_pose())),
+                object_pointcloud=proc_pcd,
+                rgb=rgb_imgs,
+                depth_full=depth_imgs,
+                depth=depth_imgs,
+                seg=[np.arange(depth_imgs[0].flatten().shape[0])]*4,
+                camera_poses=cam_poses_list,
+                obj_model_file=None,
+                obj_model_file_dec=None,
+                gripper_pts=query_point_info.external_object_qp_dict[f'gripper_{args.gripper_type}']['surface'],
+                gripper_pts_gaussian=query_point_info.external_object_qp_dict[f'gripper_{args.gripper_type}']['gaussian'],
+                gripper_pts_uniform=query_point_info.external_object_qp_dict[f'gripper_{args.gripper_type}']['uniform'],
+                gripper_contact_pose=gripper_contact_pose,
+                table_urdf=None,
+                pcd_raw=full_pcd,
+                cam_intrinsics=cam_int_list
+            )
+
+
+            
             multi_obj_start_pcd_dict = dict(
                 parent=parent_child_manager.get_parent_pointcloud(),
                 child=parent_child_manager.get_child_pointcloud())
@@ -878,7 +914,7 @@ if __name__ == "__main__":
     parser.add_argument('-p', '--port_vis', type=int, default=6000)
     parser.add_argument('--parent_class', type=str, required=True, help='Class name of parent object')
     parser.add_argument('--child_class', type=str, required=True, help='Class name of child object')
-    parser.add_argument('--instance_seg_method', type=str, default='y-axis', help='Options: ["y-axis", "hand-label"]')
+    parser.add_argument('--instance_seg_method', type=str, default='y-axis', help='Options: ["y-axis", "hand-label", "nn"]')
     parser.add_argument('--demo_save_dir', type=str, default='real_demo_data_multi_object')
     parser.add_argument('--config', type=str, default='base_demo_cfg.yaml')
     parser.add_argument('--n_cams', type=int, default=4)

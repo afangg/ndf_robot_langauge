@@ -4,21 +4,33 @@ from system_utils.vizServer import VizServer
 import argparse
 from airobot import log_info, set_log_level, log_warn
 from IPython import embed;
+import torch
 
 def main(pipeline):
+    
     prompt = pipeline.prompt_user()
     if not prompt: 
         pipeline.next_iter()
+        return
     corresponding_concept, query_text = prompt
     concept, keywords = pipeline.identify_classes_from_query(query_text, corresponding_concept)
+    torch.cuda.empty_cache()
+
     descriptions = [keyword[1] if keyword[1] else keyword[0] for keyword in keywords]
     labels_to_pcds = pipeline.segment_scene(descriptions)
 
     if not labels_to_pcds:
         log_warn('WARNING: Target object not detected, try again')
         return
-    pipeline.assign_pcds(labels_to_pcds)
     
+    i = input('Happy with segmentation (y/n)')
+    if i == 'y':
+        pass
+    else:
+        return
+    pipeline.assign_pcds(labels_to_pcds)
+    torch.cuda.empty_cache()
+
     log_info(f'Demo name:{concept}')
     pipeline.get_initial_model_paths(concept)
     pipeline.load_demos(concept)

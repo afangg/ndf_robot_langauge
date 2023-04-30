@@ -251,7 +251,7 @@ def detect_bbs(image, classes, max_count=None, score_threshold=0.1):
                                           classes, 
                                           top=max_count, 
                                           score_threshold=score_threshold, 
-                                          show_seg=False)
+                                          show_seg=True)
     obj_to_region = {}
     for caption, boxes in captions_to_bbs.items():
         obj_to_region[caption] = [(list(int(i) for i in box)) for box in boxes]
@@ -407,8 +407,6 @@ def apply_pcd_mask(full_pcd, depth_valid, masks, bb_scores):
     filtered_regions = []
     filtered_scores = []
     for i, mask in enumerate(masks):
-        # embed()
-
         camera_mask = depth_valid != 0
         # camera_mask = np.where(depth >= .1)
         camera_binary = np.zeros(depth_valid.shape)

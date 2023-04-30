@@ -44,6 +44,7 @@ class PlanningHelper:
         # self.waypoint_jnts = self.robot.home_pose.numpy()
         self.max_planning_time = 5.0
         self.planning_alg = 'rrt_star'
+        # self.planning_alg = 'birrt'
 
         self.attach_ik_obj_id = None 
 

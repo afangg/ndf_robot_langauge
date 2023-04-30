@@ -32,7 +32,7 @@ from rndf_robot.utils.real.plan_exec_util import PlanningHelper
 from rndf_robot.utils.real.perception_util import RealsenseInterface, enable_devices
 from rndf_robot.utils.real.polymetis_util import PolymetisHelper
 
-from rndf_robot.system.system_utils.sam_seg import get_mask_from_bb
+from rndf_robot.system.system_utils.sam_seg import get_mask_from_pt, Annotate
 
 poly_util = PolymetisHelper()
 
@@ -132,6 +132,7 @@ def main(args):
     prefix = rs_cfg.CAMERA_NAME_PREFIX
     camera_names = [f'{prefix}{i}' for i in range(len(serials))]
     cam_list = [camera_names[int(idx)] for idx in args.cam_index]
+    serials = [serials[int(idx)] for idx in args.cam_index]
 
     calib_dir = osp.join(path_util.get_rndf_src(), 'robot/camera_calibration_files')
     calib_filenames = [osp.join(calib_dir, f'cam_{idx}_calib_base_to_cam.json') for idx in args.cam_index]
@@ -254,7 +255,7 @@ def main(args):
     # cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.5], [0.015, 0.4], 'table'
     # cropx, cropy, cropz, crop_note = [0.3, 0.6], [0.3, 0.6], [0.01, 0.35], 'table'
 
-    cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.4, 0.0], [0.01, 0.35], 'table_right'
+    cropx, cropy, cropz, crop_note = [0.1, 0.75], [-0.5, 0.0], [0.01, 0.35], 'table_right'
     # cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.0], [0.09, 0.35], 'block2'
     # cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.0], [0.09, 0.35], 'block'
     full_cropx, full_cropy, full_cropz, full_crop_note = [0.0, 0.8], [-0.65, 0.65], [-0.01, 1.0], 'full scene'
@@ -328,6 +329,7 @@ def main(args):
             for idx, cam in enumerate(cams.cams):
                 # rgb, depth = img_subscribers[idx][1].get_rgb_and_depth(block=True)
                 rgb, depth = realsense_interface.get_rgb_and_depth_image(pipelines[idx])
+                rgb = rgb[:,:,::-1]
                 rgb_imgs.append(rgb)
 
                 # cam_intrinsics = img_subscribers[idx][2].get_cam_intrinsics(block=True)
@@ -366,30 +368,50 @@ def main(args):
             full_pcd = np.concatenate(pcd_pts, axis=0)
             full_scene_pcd = manually_segment_pcd(full_pcd, x=full_cropx, y=full_cropy, z=full_cropz, note=full_crop_note)
             
-            # crop the point cloud to the table
-            proc_pcd = manually_segment_pcd(full_pcd, x=cropx, y=cropy, z=cropz, note=crop_note)
+            if args.instance_seg_method == 'nn':
+                obj_pcd = []
 
-            pcd_o3d = open3d.geometry.PointCloud()
-            pcd_o3d.points = open3d.utility.Vector3dVector(proc_pcd)
-            # labels = np.array(pcd_o3d.cluster_dbscan(eps=0.005, min_points=50, print_progress=True))
-            labels = np.array(pcd_o3d.cluster_dbscan(eps=0.005, min_points=30, print_progress=True))
-            
-            clusters_detected = np.unique(labels)
-            pcd_clusters = []
-            cluster_sizes = []
-            for seg_idx in clusters_detected:
-                seg_inds = np.where(labels == seg_idx)[0]
-                cluster = proc_pcd[seg_inds]
-                pcd_clusters.append(cluster)
-                sz = cluster.shape[0]
-                cluster_sizes.append(sz)
-            top2sz = np.argmax(cluster_sizes)
+                for idx, _ in enumerate(cams.cams):
+                    rgb = rgb_imgs[idx]
+                    pcd_world_img = pcd_dict_list[idx]['world_img']
+                    a = Annotate()
 
-            top2clusters = pcd_clusters[top2sz]
-            # util.meshcat_multiple_pcd_show(mc_vis, pcd_clusters)
-            util.meshcat_pcd_show(mc_vis, top2clusters, name='scene/top2clusters')
-            proc_pcd = copy.deepcopy(top2clusters)
+                    selected_pt = a.select_pt(rgb, f'Select object in scene')
+                    if selected_pt is not None:
+                        mask = get_mask_from_pt(selected_pt, image=rgb, show=False)
+                        partial_pcd = pcd_world_img[mask].reshape((-1,3))
+                        obj_pcd.append(partial_pcd)
+                obj_pcd = np.concatenate(obj_pcd, axis=0)
+                proc_pcd = copy.deepcopy(obj_pcd)
+                # crop the point cloud to the table
+                proc_pcd = manually_segment_pcd(proc_pcd, x=cropx, y=cropy, z=cropz, note=crop_note)
 
+            else:
+                # crop the point cloud to the table
+                proc_pcd = manually_segment_pcd(full_pcd, x=cropx, y=cropy, z=cropz, note=crop_note)
+
+                pcd_o3d = open3d.geometry.PointCloud()
+                pcd_o3d.points = open3d.utility.Vector3dVector(proc_pcd)
+                # labels = np.array(pcd_o3d.cluster_dbscan(eps=0.005, min_points=50, print_progress=True))
+                labels = np.array(pcd_o3d.cluster_dbscan(eps=0.005, min_points=30, print_progress=True))
+                
+                clusters_detected = np.unique(labels)
+                pcd_clusters = []
+                cluster_sizes = []
+                for seg_idx in clusters_detected:
+                    seg_inds = np.where(labels == seg_idx)[0]
+                    cluster = proc_pcd[seg_inds]
+                    pcd_clusters.append(cluster)
+                    sz = cluster.shape[0]
+                    cluster_sizes.append(sz)
+                top2sz = np.argmax(cluster_sizes)
+
+                top2clusters = pcd_clusters[top2sz]
+                # util.meshcat_multiple_pcd_show(mc_vis, pcd_clusters)
+                proc_pcd = copy.deepcopy(top2clusters)
+
+
+            util.meshcat_pcd_show(mc_vis, proc_pcd, name='scene/obj_pcd')
             got_observation = True
             continue
         elif user_val == 'em':
@@ -662,6 +684,7 @@ if __name__ == "__main__":
     parser.add_argument('--demo_offset_z', type=float, default=0.0)
     parser.add_argument('--gripper_type', type=str, default='panda')
     parser.add_argument('--cam_index', nargs='+', help='set which cameras to get point cloud from', required=True)
+    parser.add_argument('--instance_seg_method', type=str, default='y-axis', help='Options: ["y-axis", "hand-label", "nn"]')
 
     args = parser.parse_args()
     main(args)
