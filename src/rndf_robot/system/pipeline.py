@@ -60,10 +60,10 @@ class Pipeline():
         self.mc_vis['optimizer'].delete()
         self.mc_vis['ee'].delete()
 
-        from pyngrok import ngrok
-        http_tunnel = ngrok.connect(6000)
-        print(f'ngrok tunnel {http_tunnel}')
-        input("continue")
+        #from pyngrok import ngrok
+        #http_tunnel = ngrok.connect(6000)
+        #print(f'ngrok tunnel {http_tunnel}')
+        #input("continue")
         random.seed(self.args.seed)
         np.random.seed(self.args.seed)
 
@@ -489,11 +489,10 @@ class Pipeline():
                 log_warn(f'Could not find pcd for ranked obj {obj_rank}')
                 continue
 
-            if self.args.pb_seg:
-                _, pcd, obj_id = labels_to_pcds[pcd_key].pop(0)
-                self.ranked_objs[obj_rank]['pcd'] = pcd
-                self.ranked_objs[obj_rank]['obj_id'] = obj_id
-                continue
+            _, pcd, obj_id = labels_to_pcds[pcd_key].pop(0)
+            self.ranked_objs[obj_rank]['pcd'] = pcd
+            self.ranked_objs[obj_rank]['obj_id'] = obj_id
+            continue
 
             #choose one that is unique
             new_pcds = []
