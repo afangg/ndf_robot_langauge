@@ -22,7 +22,7 @@ from polymetis import GripperInterface, RobotInterface
 from airobot import log_info, log_warn, log_debug, log_critical, set_log_level
 from rndf_robot.utils import util, path_util
 from rndf_robot.utils.real.plan_exec_util import PlanningHelper
-from rndf_robot.utils.franka_ik import FrankaIK
+from rndf_robot.robot.franka_ik import FrankaIK
 from rndf_robot.utils.real.traj_util import PolymetisTrajectoryUtil
 from rndf_robot.config.default_multi_realsense_cfg import get_default_multi_realsense_cfg
 

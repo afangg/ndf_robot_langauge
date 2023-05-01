@@ -22,7 +22,7 @@ from rndf_robot.utils import util, path_util
 from rndf_robot.utils.visualize import PandaHand, Robotiq2F140Hand
 from rndf_robot.utils.record_demo_utils import DefaultQueryPoints, manually_segment_pcd
 
-from rndf_robot.utils.franka_ik import FrankaIK #, PbPlUtils
+from rndf_robot.robot.franka_ik import FrankaIK #, PbPlUtils
 from rndf_robot.robot.simple_multicam import MultiRealsenseLocal
 
 from rndf_robot.config.default_multi_realsense_cfg import get_default_multi_realsense_cfg

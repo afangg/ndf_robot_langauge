@@ -3,7 +3,6 @@ import numpy as np
 import trimesh
 
 from rndf_robot.utils import util, trimesh_util
-from rndf_robot.utils.plotly_save import plot3d
 
 
 def convert_wrist2tip(wrist_pose, wrist2tip_tf):
