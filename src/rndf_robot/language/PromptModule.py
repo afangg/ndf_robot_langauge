@@ -47,5 +47,14 @@ class PromptModule:
                 break
         return corresponding_concept, query_text
     
-    def get_keywords(self, query_text, corresponding_skill, state):
+    def get_keywords_and_classes(self, prompt, state):
+        corresponding_skill, query_text = prompt
         return self.langInterpreter.identify_classes_from_query(state, query_text, corresponding_skill)
+    
+    def decompose_demo(self, prompt):
+        #ie. grasp mug_handle
+        corresponding_skill, query_text = prompt
+        action, rest = corresponding_skill[:corresponding_skill.find(' ')+1], corresponding_skill[corresponding_skill.find(' ')+1:]
+        rest = rest.split(' ')
+        obj_class, geometry = rest[0], rest[1:]
+        return action, geometry

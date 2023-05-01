@@ -17,8 +17,7 @@ from airobot import log_info, log_warn, log_debug, log_critical, set_log_level
 sys.path.append(os.environ['SOURCE_DIR'])
 
 import rndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_network
-from rndf_robot.utils import util, trimesh_util
-from rndf_robot.utils import path_util
+from rndf_robot.utils import util, path_util, trimesh_util
 
 from rndf_robot.utils.franka_ik_ndf import FrankaIK
 from rndf_robot.opt.optimizer import OccNetOptimizer
@@ -245,18 +244,13 @@ class Pipeline():
     #################################################################################################
     # Segment the scene
 
-    def assign_pcds(self, labels_to_pcds):
-        assigned_centroids = []
-        for obj_rank, obj in self.ranked_objs.items():
-            if 'pcd' in obj:
-                assigned_centroids.append(np.average(obj['pcd'], axis=0))
-        assigned_centroids = np.array(assigned_centroids)
-        # pick the pcd with the most pts
+    def assign_pcds(self, labels_to_pcds, re_seg=False):
+        # pick the pcd with the highest score
         for label in labels_to_pcds:
             labels_to_pcds[label].sort(key=lambda x: x[0])
 
         for obj_rank in self.ranked_objs:
-            # if 'pcd' in self.ranked_objs[obj_rank]: continue
+            if not re_seg and 'pcd' in self.ranked_objs[obj_rank]: continue
             description = self.ranked_objs[obj_rank]['description']
             obj_class = self.ranked_objs[obj_rank]['potential_class']
 
@@ -271,11 +265,7 @@ class Pipeline():
             new_pcds = []
             for pcd_tup in labels_to_pcds[pcd_key]:
                 score, pcd = pcd_tup
-                if assigned_centroids.any():
-                    diff = assigned_centroids-np.average(pcd, axis=0)
-                    centroid_dists = np.sqrt(np.sum(diff**2,axis=-1))
-                    if min(centroid_dists) <= 0.05:
-                        continue
+
                 new_pcds.append(pcd)
             self.ranked_objs[obj_rank]['pcd'] = new_pcds.pop(-1)
             if self.args.show_pcds:
@@ -350,7 +340,6 @@ class Pipeline():
     
         cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.4, 0.0], [0.01, 0.35], 'table_right'
         proc_pcd = manually_segment_pcd(pcd_world, x=cropx, y=cropy, z=cropz, note=crop_note)
-        # proc_pcd = pcd_world
         util.meshcat_pcd_show(self.mc_vis, proc_pcd, name=f'scene/pcd_world_cam_{idx}')
 
         return pcd_world_img, depth_valid
@@ -452,8 +441,8 @@ class Pipeline():
 
         for obj_label in captions:
             if obj_label not in label_to_pcds:
-                log_warn('WARNING: COULD NOT FIND RELEVANT OBJ')
-                break
+                log_warn(f'WARNING: COULD NOT FIND {obj_label} OBJ')
+                continue
             obj_pcd_sets = label_to_pcds[obj_label]
             for i, target_obj_pcd_obs in enumerate(obj_pcd_sets):
                 score = np.average(label_to_scores[obj_label][i])
@@ -620,11 +609,6 @@ class Pipeline():
                                                 start_position=start_pose, 
                                                 execute=False)
             start_pose = jnt_pose
-            # else:
-            #     resulting_traj = self.planning.plan_joint_target(joint_position_desired=jnt_pose, 
-            #                                     from_current=True, 
-            #                                     start_position=None, 
-            #                                     execute=execute)
             if resulting_traj is None:
                 break
             else:

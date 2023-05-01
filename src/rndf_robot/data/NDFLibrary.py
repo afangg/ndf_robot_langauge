@@ -24,13 +24,14 @@ RELATIONS = {'on the', 'by the', 'in the'}
 DOCSTRINGS = {  
                 'grasp':  
                     '''
-                        Skill to grasp an object conditioned on its pointcloud, its object class and a certain 
-                            geometric feature to grasp at. Skill is executed
+                        Skill to grasp an object conditioned on its pointcloud, its object class and 
+                        an optional argument if there's a certain geometric feature to grasp at. Skill is executed
 
                         Args:
-                            target_pcd (np.ndarray): N x 3 array representing the 3D point cloud of the 
+                            target (target_pcds, target_class):
+                                target_pcd (np.ndarray): N x 3 array representing the 3D point cloud of the 
                                 target object to be grasped, expressed in the world coordinate system
-                            obj_class (str): Class of the object to be grasped. Must be in self.obj_classes 
+                                target_class (str): Class of the object to be grasped. Must be in self.obj_classes 
                             geometry (str): Description of a geometric feature on the object to execute grasp upon
                                 ex. "handle" of a mug class object
                         
@@ -44,14 +45,16 @@ DOCSTRINGS = {
                             a certain geometric feature to place at. Skill is executed
 
                         Args:
-                            target_pcd (np.ndarray): N x 3 array representing the 3D point cloud of the 
+                            target (target_pcds, target_class):
+                                target_pcd (np.ndarray): N x 3 array representing the 3D point cloud of the 
                                 target object to be placed, expressed in the world coordinate system
-                            obj_class (str): Class of the object to be placed. Must be in self.obj_classes 
+                                target_class (str): Class of the object to be placed. Must be in self.obj_classes 
                             geometry (str): Description of a geometric feature on the scene to execute place upon
                                 ex. "shelf" on the table
                         
                         Return:
-                            list of ee poses to move to
+                            new_position (Array-like, length 3): Final position of the EE, after performing the move action.
+                                If grasp fails, returns None
                     ''',
                 'place_relative':
                     '''
@@ -59,7 +62,7 @@ DOCSTRINGS = {
                             to place at. Skill is executed
 
                         Args:
-                            target (np.ndarray, str): N x 3 array representing the 3D point cloud of the  arget object 
+                            target (np.ndarray, str): N x 3 array representing the 3D point cloud of the target object 
                                 to be placed, expressed in the world coordinate system and the class of the object to be placed. 
                                 Must be in self.obj_classes 
                             relational (np.ndarray, str): N x 3 array representing the 3D point cloud of the relational 
@@ -322,21 +325,21 @@ class NDFLibrary:
         optimizer.set_demo_info(demo_dic['demo_info'])
         
         pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=False)
-        cooresponding_pose = util.pose_from_matrix(pose_mats[best_idx])
+        corresponding_pose = util.pose_from_matrix(pose_mats[best_idx])
 
         # grasping requires post processing to find anti-podal point
-        cooresponding_pose_list = util.pose_stamped2list(cooresponding_pose)
-        cooresponding_pose_list[:3] = post_process_grasp_point(cooresponding_pose_list, 
+        corresponding_pose_list = util.pose_stamped2list(corresponding_pose)
+        corresponding_pose_list[:3] = post_process_grasp_point(corresponding_pose_list, 
                                                                target_pcd, 
                                                                thin_feature=(not self.args.non_thin_feature), 
                                                                grasp_viz=self.args.grasp_viz, 
                                                                grasp_dist_thresh=self.args.grasp_dist_thresh)
-        cooresponding_pose = util.list2pose_stamped(cooresponding_pose_list)
+        corresponding_pose = util.list2pose_stamped(corresponding_pose_list)
 
-        offset_tf1 = util.list2pose_stamped(get_ee_offset(ee_pose=cooresponding_pose_list))
-        pre_ee_end_pose1 = util.transform_pose(pose_source=util.list2pose_stamped(cooresponding_pose_list), pose_transform=offset_tf1)
+        offset_tf1 = util.list2pose_stamped(get_ee_offset(ee_pose=corresponding_pose_list))
+        pre_ee_end_pose1 = util.transform_pose(pose_source=util.list2pose_stamped(corresponding_pose_list), pose_transform=offset_tf1)
 
-        ee_poses = [pre_ee_end_pose1, cooresponding_pose]
+        ee_poses = [pre_ee_end_pose1, corresponding_pose]
         return [util.pose_stamped2list(pose) for pose in ee_poses]
     
     def place(self, target_pcd, obj_class, geometry, ee_pose):        
@@ -364,9 +367,9 @@ class NDFLibrary:
         
         pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=False)
 
-        cooresponding_pose = util.pose_from_matrix(pose_mats[best_idx])
-        cooresponding_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=cooresponding_pose)
-        ee_poses = [*self.get_place_pre_poses(cooresponding_pose), cooresponding_pose]
+        corresponding_pose = util.pose_from_matrix(pose_mats[best_idx])
+        corresponding_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=corresponding_pose)
+        ee_poses = [*self.get_place_pre_poses(corresponding_pose), corresponding_pose]
         return [util.pose_stamped2list(pose) for pose in ee_poses]
     
     def place_relative(self, target, relational, geometry, ee_pose):
@@ -400,21 +403,21 @@ class NDFLibrary:
         relational_query_pts, target_query_pcd = demo_dic[0]['query_pts'], demo_dic[1]['query_pts']
 
         self.viz.pause_mc_thread(True)
-        cooresponding_mat = infer_relation_intersection(
+        corresponding_mat = infer_relation_intersection(
             self.viz.mc_vis, rel_optimizer, target_optimizer, 
             relational_target_desc, target_desc, 
             relational_pcd, target_pcd, relational_query_pts, target_query_pcd, opt_visualize=self.args.opt_visualize)
         self.viz.pause_mc_thread(False)
 
-        cooresponding_pose = util.pose_from_matrix(cooresponding_mat)
-        cooresponding_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=cooresponding_pose)
-        ee_poses = [*self.get_place_pre_poses(cooresponding_pose), cooresponding_pose]
+        corresponding_pose = util.pose_from_matrix(corresponding_mat)
+        corresponding_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=corresponding_pose)
+        ee_poses = [*self.get_place_pre_poses(corresponding_pose), corresponding_pose]
         return [util.pose_stamped2list(pose) for pose in ee_poses]
 
-    def get_place_pre_poses(self, cooresponding_pose):
+    def get_place_pre_poses(self, corresponding_pose):
         offset_tf1 = util.list2pose_stamped(self.cfg.PREPLACE_OFFSET_TF)
         offset_tf2 = util.list2pose_stamped(self.cfg.PREPLACE_VERTICAL_OFFSET_TF)
-        pre_ee_end_pose2 = util.transform_pose(pose_source=cooresponding_pose, pose_transform=offset_tf1)
+        pre_ee_end_pose2 = util.transform_pose(pose_source=corresponding_pose, pose_transform=offset_tf1)
         pre_ee_end_pose1 = util.transform_pose(pose_source=pre_ee_end_pose2, pose_transform=offset_tf2) 
         return [pre_ee_end_pose1, pre_ee_end_pose2]
     

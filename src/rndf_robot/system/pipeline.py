@@ -294,66 +294,7 @@ class Pipeline():
             log_info('Config file %s does not exist, using defaults' % config_fname)
         cfg.freeze()
         return cfg
-    #################################################################################################
-    # Language
-    
-    def prompt_user(self):
-        '''
-        Prompts the user to input a command and finds the demos that relate to the concept.
-        Moves to the next state depending on the input
 
-        return: the concept most similar to their query and their input text
-        '''
-        log_debug('All demo labels: %s' %all_demos.keys())
-        while True:
-            query = self.ask_query()
-            # query = "place mug_on the shelf", "put the mug on the shelf"
-
-            if not query: return
-            corresponding_concept, query_text = query
-            demos = get_concept_demos(corresponding_concept)
-            if not len(demos):
-                log_warn('No demos correspond to the query! Try a different prompt')
-                continue
-            else:
-                log_debug('Number of Demos %s' % len(demos)) 
-                break
-        
-        self.skill_demos = demos
-        if corresponding_concept.startswith('grasp'):
-            self.state = 0
-        elif corresponding_concept.startswith('place') and self.state == 0:
-            self.state = 1
-        elif corresponding_concept.startswith('place') and self.state == -1:
-            self.state = 2
-        log_debug('Current State is %s' %self.state)
-        return corresponding_concept, query_text
-
-    def ask_query(self):
-        '''
-        Prompts the user to input a command and identifies concept
-
-        return: the concept most similar to their query and their input text
-        '''
-        concepts = list(all_demos.keys())
-        while True:
-            query_text = input('Please enter a query or \'reset\' to reset the scene\n')
-            if not query_text: continue
-            if query_text.lower() == "reset": return
-            ranked_concepts = query_correspondance(concepts, query_text)
-            corresponding_concept = None
-            for concept in ranked_concepts:
-                print('Corresponding concept:', concept)
-                correct = input('Corrent concept? (y/n)\n')
-                if correct == 'n':
-                    continue
-                elif correct == 'y':
-                    corresponding_concept = concept
-                    break
-            
-            if corresponding_concept:
-                break
-        return corresponding_concept, query_text
 
     #################################################################################################
     def associate_ranked_objs(self, relevant_objs):
@@ -544,13 +485,18 @@ class Pipeline():
         pcds_output = {}
         for obj_id, obj_pcd_pts in pc_obs_info['pcd_pts'].items():
             if not obj_pcd_pts:
-                log_warn('WARNING: COULD NOT FIND RELEVANT OBJ')
-                break
+                log_warn(f'WARNING: COULD NOT FIND {obj_id} OBJ')
+                continue
 
             target_obj_pcd_obs = np.concatenate(obj_pcd_pts, axis=0)  # object shape point cloud
-            target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
-            inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
-            target_obj_pcd_obs = target_obj_pcd_obs[inliers]
+            target_obj_pcd_obs = manually_segment_pcd(target_obj_pcd_obs, mean_inliners=True)
+
+            if not target_obj_pcd_obs:
+                log_warn(f'WARNING: COULD NOT FIND {obj_id} OBJ')
+                continue
+
+            util.meshcat_pcd_show(self.mc_vis, target_obj_pcd_obs, color=(0, 255, 0), name=f'scene/cam_{i}_{obj_label}_region_{j}')
+
             self.obj_info[obj_id]['pcd'] = target_obj_pcd_obs
             obj_class = self.obj_info[obj_id]['class']
             if obj_class not in pcds_output:
@@ -895,8 +841,7 @@ class Pipeline():
         self.robot.pb_client.reset_body(obj_id, final_pos, final_ori)
 
         final_pcd = util.transform_pcd(self.obj_info[obj_id]['pcd'], transform)
-        with self.recorder.meshcat_scene_lock:
-            util.meshcat_pcd_show(self.mc_vis, final_pcd, color=[255, 0, 255], name=f'scene/{obj_id}_pcd')
+        util.meshcat_pcd_show(self.mc_vis, final_pcd, color=[255, 0, 255], name=f'scene/{obj_id}_pcd')
         time.sleep(3.0)
 
         # turn on the physics and let things settle to evaluate success/failure
