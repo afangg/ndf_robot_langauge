@@ -19,7 +19,6 @@ from polymetis import GripperInterface, RobotInterface
 from airobot import log_info, log_warn, log_debug, log_critical, set_log_level
 
 from rndf_robot.utils import util, path_util
-from rndf_robot.utils.plotly_save import plot3d, plotly_scene_dict
 from rndf_robot.utils.visualize import PandaHand, Robotiq2F140Hand
 from rndf_robot.utils.record_demo_utils import DefaultQueryPoints, manually_segment_pcd
 
@@ -527,12 +526,6 @@ def main(args):
             util.safe_makedirs(depth_dir)
             util.safe_makedirs(pcd_dir)
 
-            plot3d(
-                [proc_pcd],
-                fname=osp.join(pcd_save_dir, 'pcd.html'),
-                auto_scene=False,
-                scene_dict=plotly_scene_dict,
-                z_plane=False)
             for i in range(len(rgb_imgs)):
                 cv2.imwrite(osp.join(img_dir, '%d.png' % i), cv2.cvtColor(rgb_imgs[i], cv2.COLOR_RGB2BGR))
                 cv2.imwrite(osp.join(depth_dir, '%d.png' % i), depth_imgs[i].astype(np.uint16))
@@ -595,12 +588,7 @@ def main(args):
             custom_query_points = copy.deepcopy(query_point_info.default_origin_pts)
             custom_query_points = util.transform_pcd(custom_query_points, util.matrix_from_pose(util.list2pose_stamped(current_ee_query_pose)))
             query_point_info.set_custom_query_points(custom_query_points)
-            plot3d(
-                [query_point_info.custom_query_points], 
-                fname=osp.join(pcd_save_dir, 'custom_query_points.html'),
-                auto_scene=False,
-                scene_dict=plotly_scene_dict,
-                z_plane=False)
+
             # util.meshcat_pcd_show(mc_vis, query_point_info.custom_query_points, color=[128, 128, 0], name='scene/custom_query_points')
 
             custom_query_save_path = osp.join(demo_save_dir, 'custom_query_point_info.npz')

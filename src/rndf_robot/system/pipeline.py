@@ -10,8 +10,7 @@ sys.path.append(os.environ['SOURCE_DIR'])
 
 import pybullet as p
 import rndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_network
-from rndf_robot.utils import util, trimesh_util
-from rndf_robot.utils import path_util
+from rndf_robot.utils import util, path_util
 
 from rndf_robot.utils.franka_ik_ndf import FrankaIK
 from rndf_robot.opt.optimizer import OccNetOptimizer
@@ -29,7 +28,7 @@ from rndf_robot.utils.pipeline_util import (
     get_ee_offset,
     constraint_obj_world,
 )
-from rndf_robot.utils.rndf_utils import infer_relation_intersection, create_target_descriptors
+from rndf_robot.data.rndf_utils import infer_relation_intersection, create_target_descriptors
 from system_utils.language import query_correspondance, chunk_query, create_keyword_dic
 from system_utils.demos import all_demos, get_concept_demos, create_target_desc_subdir, get_model_paths
 import system_utils.objects as objects
@@ -388,7 +387,6 @@ class Pipeline():
                 log_warn('NO RELEVANT OBJECT IN THE SCENE. EXITING')
                 return
 
-
     #################################################################################################
     # Segment the scene
 
@@ -494,24 +492,6 @@ class Pipeline():
             self.ranked_objs[obj_rank]['obj_id'] = obj_id
             continue
 
-            #choose one that is unique
-            new_pcds = []
-            for pcd_tup in labels_to_pcds[pcd_key]:
-                if len(pcd_tup) == 3:
-                    score, pcd, _ = pcd_tup
-                else:
-                    score, pcd = pcd_tup
-                if assigned_centroids.any():
-                    diff = assigned_centroids-np.average(pcd, axis=0)
-                    centroid_dists = np.sqrt(np.sum(diff**2,axis=-1))
-                    if min(centroid_dists) <= 0.05:
-                        continue
-                new_pcds.append(pcd)
-            self.ranked_objs[obj_rank]['pcd'] = new_pcds.pop(-1)
-            if self.args.show_pcds:
-                log_debug(f'Best score was {score}')
-                trimesh_util.trimesh_show([self.ranked_objs[obj_rank]['pcd']])
-
         for rank, obj in self.ranked_objs.items():
             label = f'scene/initial_{rank}_pcd'
             color = [random.randint(0,255), random.randint(0,255), random.randint(0,255)]
@@ -597,6 +577,7 @@ class Pipeline():
 
         for fname in self.skill_demos[:min(n, len(self.skill_demos))]:
             demo = np.load(fname, allow_pickle=True)
+            obj_id = None
             if 'shapenet_id' in demo:
                 obj_id = demo['shapenet_id'].item()
 
@@ -612,7 +593,8 @@ class Pipeline():
 
             if target_info is not None:
                 self.ranked_objs[0]['demo_info'].append(target_info)
-                self.ranked_objs[0]['demo_ids'].append(obj_id)
+                if obj_id is not None:
+                    self.ranked_objs[0]['demo_ids'].append(obj_id)
             else:
                 log_debug('Could not load demo')
         self.ranked_objs[0]['query_pts'] = process_xq_data(demo, table_obj=self.table_obj)

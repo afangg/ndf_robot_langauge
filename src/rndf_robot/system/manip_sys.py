@@ -44,6 +44,56 @@ def main(pipeline, generate_new_scene=True):
     else:
         return pipeline.step()
 
+def main(args):
+    system_env = Environment(args)
+    ndf_lib = NDFLibrary(args, obj_classes=OBJECT_CLASSES)
+    robot = Robot(ndf_lib)
+    prompter = PromptModule(ndf_lib.default_demos)
+
+    primitive_template = robot.skill_library.get_primitive_templates()
+    print(primitive_template)
+
+    run(system_env, robot, prompter, ndf_lib)
+
+def run(system_env: Environment, robot: Robot, prompter: PromptModule, ndf_lib: NDFLibrary):
+    prompt = prompter.prompt_user()
+    if not prompt:
+        return
+    
+    corresponding_skill, query_text = prompt
+
+    if corresponding_skill.startswith('grasp'):
+        system_env.state = 0
+    elif corresponding_skill.startswith('place'):
+        system_env.state = 1
+    elif corresponding_skill.startswith('place') and system_env.state == -1:
+        system_env.state = 2
+
+    keywords, rank_to_class = prompter.get_keywords(system_env.state, query_text, corresponding_skill)
+    system_env.set_nouns(rank_to_class)
+
+    descriptions = [keyword[1] if keyword[1] else keyword[0] for keyword in keywords]
+    labels_to_pcds = system_env.segment_scene(descriptions)
+
+    if not labels_to_pcds:
+        log_warn('WARNING: Target object not detected, try again')
+        return
+    
+    i = input('Happy with segmentation (y/n)')
+    if i == 'y':
+        pass
+    else:
+        return
+    
+    log_debug('Current State is %s' %system_env.state)
+    system_env.assign_pcds(labels_to_pcds)
+
+    action, rest = corresponding_skill[:corresponding_skill.find(' ')+1], corresponding_skill[corresponding_skill.find(' ')+1:]
+    rest = rest.split(' ')
+    obj_class, geometry = rest[0], rest[1:]
+    skill_func = robot.FUNCTIONS[action]
+    skill_func(robot, system_env[0], obj_class, geometry)
+    
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # parser.add_argument('--query_text', type=str, required=True)

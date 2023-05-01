@@ -13,7 +13,20 @@ def main(pipeline):
         pipeline.next_iter()
         return
     corresponding_concept, query_text = prompt
-    concept, keywords = pipeline.identify_classes_from_query(query_text, corresponding_concept)
+    demos = get_concept_demos(corresponding_concept)
+    log_debug('Number of Demos %s' % len(demos)) 
+        
+    self.skill_demos = demos
+    if corresponding_concept.startswith('grasp'):
+        self.state = 0
+    elif corresponding_concept.startswith('place'):
+        self.state = 1
+    # elif corresponding_concept.startswith('place') and self.state == -1:
+    #     self.state = 2
+    log_debug('Current State is %s' %self.state)
+    
+    concept, keywords, rank_to_class = pipeline.identify_classes_from_query(query_text, corresponding_concept)
+    pipeline.set_nouns(rank_to_class)
     torch.cuda.empty_cache()
 
     descriptions = [keyword[1] if keyword[1] else keyword[0] for keyword in keywords]

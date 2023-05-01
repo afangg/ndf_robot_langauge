@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 
 from airobot.sensor.camera.rgbdcam import RGBDCamera
 
-from rndf_robot.utils import util, trimesh_util, plotly_save, geometry_np
+from rndf_robot.utils import util, geometry_np
 from rndf_robot.utils.util import np2img
 from rndf_robot.utils.experiment_utils import SegmentationAugmentation
 
