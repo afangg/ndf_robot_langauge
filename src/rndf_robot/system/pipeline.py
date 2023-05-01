@@ -60,6 +60,10 @@ class Pipeline():
         self.mc_vis['optimizer'].delete()
         self.mc_vis['ee'].delete()
 
+        from pyngrok import ngrok
+        http_tunnel = ngrok.connect(6000)
+        print(f'ngrok tunnel {http_tunnel}')
+        input("continue")
         random.seed(self.args.seed)
         np.random.seed(self.args.seed)
 
@@ -208,7 +212,7 @@ class Pipeline():
             
         log_debug('final: %s' %pos)
 
-        if self.random_pos:
+        if False:
             if self.test_obj in ['bowl', 'bottle']:
                 rp = np.random.rand(2) * (2 * np.pi / 3) - (np.pi / 3)
                 ori = common.euler2quat([rp[0], rp[1], 0]).tolist()
@@ -515,7 +519,7 @@ class Pipeline():
             util.meshcat_pcd_show(self.mc_vis, obj['pcd'], color=color, name=label)
 
 
-    def segment_scene_pb(self, obj_ids=None):
+    def segment_scene(self, obj_ids=None):
         if not obj_ids:
             obj_ids = list(self.obj_info.keys())
             

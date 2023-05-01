@@ -81,9 +81,8 @@ if __name__ == "__main__":
     parser.add_argument('--add_noise', action='store_true')
     parser.add_argument('--noise_idx', type=int, default=0)
 
-    parser.add_argument('--pb_seg', action='store_true')
     parser.add_argument('--table_type', type=str, default='default')
-
+    parser.add_argument('--port_vis', type=int, default=6000)
     args = parser.parse_args()
 
     if args.debug:
