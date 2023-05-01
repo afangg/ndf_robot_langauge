@@ -23,11 +23,8 @@ def main(pipeline, generate_new_scene=True):
         return pipeline.step()
     corresponding_concept, query_text = prompt
     concept, keywords = pipeline.identify_classes_from_query(query_text, corresponding_concept)
-    if pipeline.args.pb_seg:
-        labels_to_pcds = pipeline.segment_scene_pb()
-    else:
-        descriptions = [keyword[1] if keyword[1] else keyword[0] for keyword in keywords]
-        labels_to_pcds = pipeline.segment_scene(descriptions)
+    labels_to_pcds = pipeline.segment_scene()
+
     if not labels_to_pcds:
         log_warn('WARNING: Target object not detected, resetting the scene')
         pipeline.reset()
