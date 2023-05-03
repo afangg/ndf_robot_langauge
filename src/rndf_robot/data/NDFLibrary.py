@@ -15,6 +15,7 @@ from rndf_robot.utils.pipeline_util import (
 from rndf_robot.opt.optimizer import OccNetOptimizer
 import rndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_network
 from rndf_robot.data.rndf_utils import infer_relation_intersection, create_target_descriptors
+from rndf_robot.data.demo_data_processing import *
 
 from airobot import log_debug, log_warn, log_info
 from IPython import embed
