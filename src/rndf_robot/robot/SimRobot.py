@@ -12,11 +12,12 @@ from rndf_robot.utils.pipeline_util import (
     object_is_still_grasped, 
     constraint_obj_world
 )
-from .Robot import Robot
+from .Robot import Robot as RobotParent
 
-from airobot import log_debug, log_warn, log_info
+from airobot import Robot, log_debug, log_warn, log_info
+from IPython import embed
 
-class SimRobot(Robot):
+class SimRobot(RobotParent):
 
     #################################################################################################
     # Setup
@@ -68,13 +69,15 @@ class SimRobot(Robot):
     def get_ee_pose(self):
         return np.concatenate(self.robot.arm.get_ee_pose()[:2]).tolist()
 
+    def get_jpos(self):
+        return self.robot.arm.get_jpos()
     #################################################################################################
     # PyBullet Things
     def delete_scene(self, obj_ids):
         for obj_id in obj_ids:
             self.robot.pb_client.remove_body(obj_id)
 
-    def add_obj(self, obj_file, scale_default, upright_ori, color=None):
+    def add_obj(self, obj_file, scale_default, upright_ori, existing_objs=[], color=None):
         x_low, x_high = self.cfg.OBJ_SAMPLE_X_HIGH_LOW
         y_low, y_high = self.cfg.OBJ_SAMPLE_Y_HIGH_LOW
 
@@ -84,7 +87,7 @@ class SimRobot(Robot):
 
         pos = [np.random.random() * (x_high - x_low) + x_low, np.random.random() * (y_high - y_low) + y_low, self.cfg.TABLE_Z]
         log_debug('original: %s' %pos)
-        for obj_id, obj in self.obj_info.items():
+        for obj_id, obj in existing_objs.items():
             existing_pos = util.pose_stamped2list(obj['pose'])
 
             if abs(pos[1]-existing_pos[1]) < self.cfg.OBJ_SAMPLE_PLACE_Y_DIST:
@@ -153,7 +156,7 @@ class SimRobot(Robot):
             base_ori=ori,
             rgba=color)
         self.ik_helper.add_collision_bodies({obj_id: obj_id})
-        # safeCollisionFilterPair(obj_id, self.table_id, -1, -1, enableCollision=True)
+        safeCollisionFilterPair(obj_id, self.robot.arm.robot_id, -1, -1, enableCollision=True)
         p.changeDynamics(obj_id, -1, lateralFriction=0.5, linearDamping=5, angularDamping=5)
         time.sleep(1.5)
 
@@ -169,6 +172,11 @@ class SimRobot(Robot):
         self.robot.arm.go_home(ignore_physics=True)
         self.robot.arm.move_ee_xyz([0, 0, 0.2])
 
+    def execute(self, ee_poses):
+        self.execute_pre_step()
+        self.execute_traj(ee_poses)
+        self.execute_post_step()
+        
     def execute_pre_step(self, obj_id=None):
         if obj_id:
             safeCollisionFilterPair(bodyUniqueIdA=obj_id, bodyUniqueIdB=self.table_id, linkIndexA=-1, linkIndexB=self.table_obj_link_id, enableCollision=True)
@@ -192,8 +200,8 @@ class SimRobot(Robot):
                     safeCollisionFilterPair(bodyUniqueIdA=self.robot.arm.robot_id, bodyUniqueIdB=obj_id, linkIndexA=i, linkIndexB=-1, enableCollision=True, physicsClientId=self.robot.pb_client.get_client_id())
 
             time.sleep(0.8)
-            jnt_pos_before_grasp = self.robot.arm.get_jpos()
-            self.gripper_state(self, open=False)
+            jnt_pos_before_grasp = self.get_jpos()
+            self.gripper_state(open=False)
             time.sleep(1.5)
 
             if obj_id:
@@ -225,11 +233,10 @@ class SimRobot(Robot):
                 self.state = 0
 
     def execute_traj(self, ee_poses):
-        ee_file = osp.join(path_util.get_llm_descriptions(), 'franka_panda/meshes/robotiq_2f140/full_hand_2f140.obj')
         for i, ee_pose in enumerate(ee_poses):
             pose = util.body_world_yaw(util.list2pose_stamped(ee_pose), theta=-1.5708)
             pose = util.matrix_from_pose(pose)
-            util.meshcat_obj_show(self.mc_vis, ee_file, pose, 1.0, name=f'ee/ee_{i}')
+            util.meshcat_obj_show(self.mc_vis, self.ee_file, pose, 1.0, name=f'ee/ee_{i}')
 
         jnt_poses = [self.cascade_ik(pose) for pose in ee_poses]
         prev_pos = self.get_jpos()
@@ -248,7 +255,7 @@ class SimRobot(Robot):
     #################################################################################################
     # Other Helpers
 
-    def teleport(self, obj_id, relative_pose):
+    def teleport(self, obj_id, pcd, relative_pose):
         transform = util.matrix_from_pose(util.list2pose_stamped(relative_pose[0]))
         start_pose = np.concatenate(self.robot.pb_client.get_body_state(obj_id)[:2]).tolist()
         start_pose_mat = util.matrix_from_pose(util.list2pose_stamped(start_pose))
@@ -260,7 +267,7 @@ class SimRobot(Robot):
 
         self.robot.pb_client.reset_body(obj_id, final_pos, final_ori)
 
-        final_pcd = util.transform_pcd(self.obj_info[obj_id]['pcd'], transform)
+        final_pcd = util.transform_pcd(pcd, transform)
         util.meshcat_pcd_show(self.mc_vis, final_pcd, color=[255, 0, 255], name=f'scene/{obj_id}_pcd')
         time.sleep(3.0)
 

@@ -1,35 +1,29 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
 
 from __future__ import print_function
 import os, os.path as osp
 import copy
 import sys
-import numpy as np
-from scipy.spatial.transform import Rotation as R
-
 pb_planning_src = os.environ['PB_PLANNING_SOURCE_DIR']
 sys.path.append(pb_planning_src)
 import pybullet as p
 
 from pybullet_tools.utils import add_data_path, connect, dump_body, disconnect, wait_for_user, \
-    get_movable_joints, get_sample_fn, set_joint_positions, get_joint_positions, get_joint_name, get_joint_info, LockRenderer, link_from_name, get_link_pose, \
+    get_movable_joints, get_sample_fn, set_joint_positions, get_joint_name, LockRenderer, link_from_name, get_link_pose, \
     multiply, Pose, Point, interpolate_poses, HideOutput, draw_pose, set_camera_pose, load_pybullet, \
     assign_link_colors, add_line, point_from_pose, remove_handles, BLUE, pairwise_collision, set_client, get_client, pairwise_link_collision, \
-    plan_joint_motion, create_attachment, enable_real_time, disable_real_time, body_from_end_effector, set_pose, set_renderer
+    plan_joint_motion
 
-from pybullet_tools.ikfast.franka_panda.ik import PANDA_INFO, FRANKA_URDF_2F140, FRANKA_URDF # , FRANKA_URDF_NOGRIPPER
-# FRANKA_URDF = FRANKA_URDF_WIDE
-# FRANKA_URDF_NOGRIPPER = osp.join(pb_planning_src, FRANKA_URDF_NOGRIPPER)
+from pybullet_tools.ikfast.franka_panda.ik import PANDA_INFO, FRANKA_URDF
 FRANKA_URDF = osp.join(pb_planning_src, FRANKA_URDF)
-FRANKA_URDF_2F140 = osp.join(pb_planning_src, FRANKA_URDF_2F140)
+print('FRANKA URDF: ', FRANKA_URDF)
 from pybullet_tools.ikfast.ikfast import get_ik_joints, either_inverse_kinematics, check_ik_solver
 
 from airobot.utils import common
 from rndf_robot.utils import util
 
 class FrankaIK:
-    def __init__(self, gui=True, base_pos=[0, 0, 1], robotiq=False, no_gripper=False, mc_vis=None):
-        self.robotiq = robotiq
+    def __init__(self, gui=True, base_pos=[0, 0, 1]):
         if gui:
             set_client(0)
         else:
@@ -42,33 +36,13 @@ class FrankaIK:
 
         with LockRenderer():
             with HideOutput(True):
-                self.no_gripper = False
-                if no_gripper:
-                    # self.no_gripper = True
-                    # self.robot = load_pybullet(FRANKA_URDF_NOGRIPPER, base_pos=base_pos, fixed_base=True)
-                    # assign_link_colors(self.robot, max_colors=3, s=0.5, v=1.)
-                    pass
-                else:
-                    if robotiq:
-                        self.robot = load_pybullet(FRANKA_URDF_2F140, base_pos=base_pos, fixed_base=True)
-                        assign_link_colors(self.robot, max_colors=3, s=0.5, v=1.)
-                    else:
-                        self.robot = load_pybullet(FRANKA_URDF, base_pos=base_pos, fixed_base=True)
-                        assign_link_colors(self.robot, max_colors=3, s=0.5, v=1.)
-        print('FRANKA URDF: ', FRANKA_URDF_2F140 if robotiq else FRANKA_URDF)
+                self.robot = load_pybullet(FRANKA_URDF, base_pos=base_pos, fixed_base=True)
+                assign_link_colors(self.robot, max_colors=3, s=0.5, v=1.)
 
         dump_body(self.robot)
 
         self.info = PANDA_INFO
-        if self.no_gripper:
-            self.tool_link = link_from_name(self.robot, 'panda_link8')
-        else:
-            if robotiq:
-                self.tool_link = link_from_name(self.robot, 'panda_link8')
-                self.attach_tool_link = link_from_name(self.robot, 'panda_grasptarget')
-            else:
-                self.tool_link = link_from_name(self.robot, 'panda_hand')
-        
+        self.tool_link = link_from_name(self.robot, 'panda_hand')
         draw_pose(Pose(), parent=self.robot, parent_link=self.tool_link)
         self.movable_joints = get_movable_joints(self.robot)
         print('Joints', [get_joint_name(self.robot, joint) for joint in self.movable_joints])
@@ -99,20 +73,6 @@ class FrankaIK:
             (10, 11)
         ]
 
-        if self.robotiq:
-            self.panda_ignore_pairs_initial += [(6,9),
-                                                (8,10), (8,12), 
-                                                (9,14), (9,15), (9,19),
-                                                (10,14),
-                                                (11,12),
-                                                (12,13), (12,14),
-                                                (13,14),
-                                                (15,16), (15,19),
-                                                (16,17),
-                                                (17,18), (17,19),
-                                                (18,19)
-            ]
-
         # symmetric
         self.panda_ignore_pairs = []
         for (i, j) in self.panda_ignore_pairs_initial:
@@ -121,18 +81,10 @@ class FrankaIK:
         self._setup_self(ignore_link_pairs=self.panda_ignore_pairs)
 
         set_joint_positions(self.robot, self.ik_joints, self.home_joints)
-        self.obstacle_dict = {}
+        self.obstacle_dict = {} 
 
-        if self.robotiq:
-            self._grasp_target_to_ee = [0, 0, -0.23, 0, 0, 0, 1]
-            self._ee_to_grasp_target = [0, 0, 0.23, 0, 0, 0, 1]
-        else:
-            self._grasp_target_to_ee = [0, 0, -0.105, 0, 0, 0, 1]
-            self._ee_to_grasp_target = [0, 0, 0.105, 0, 0, 0, 1]
-
-        self.mc_vis = mc_vis
-        self.lower_limits = [get_joint_info(self.robot, joint).jointLowerLimit for joint in self.ik_joints]
-        self.upper_limits = [get_joint_info(self.robot, joint).jointUpperLimit for joint in self.ik_joints]
+        self._grasp_target_to_ee = [0, 0, -0.105, 0, 0, 0, 1]
+        self._ee_to_grasp_target = [0, 0, 0.105, 0, 0, 0, 1]
 
     def set_jpos(self, jnts):
         set_joint_positions(self.robot, self.ik_joints, jnts)
@@ -197,25 +149,8 @@ class FrankaIK:
                 return True, 1
         return False, 0
 
-    def all_between(self, lower_limits, values, upper_limits):
-        assert len(lower_limits) == len(values)
-        assert len(values) == len(upper_limits)
-        return np.less_equal(lower_limits, values).all() and np.less_equal(values, upper_limits).all()
-    
-    def within_joint_limits(self, q, verbose=False):
-        if self.all_between(self.lower_limits, q, self.upper_limits):
-            #print('Joint limits violated')
-            if verbose: 
-                print(self.lower_limits, q, self.upper_limits)
-            return True
-        return False
-
     def check_collision(self):
         # self_collision = any_link_pair_collision(self.robot, None, self.robot, None)
-        within_joint_limits = self.within_joint_limits(get_joint_positions(self.robot, self.ik_joints))
-        if not within_joint_limits:
-            return True, 'limits'
-
         self_collision = self.check_self_collision()[0]
         if self_collision:
             return True, 'self'
@@ -272,13 +207,6 @@ class FrankaIK:
         pose = (tuple(pos), tuple(ori))
         confs = either_inverse_kinematics(self.robot, self.info, self.tool_link, pose, 
                                           max_distance=None, max_time=0.5, max_candidates=250)
-        
-        # # randomize the confs to get different ones if we call this multiple times
-        # def yielding(ls):
-        #     for val in ls:
-        #         yield val
-        # confs = list(yielding(confs))
-        # random.shuffle(confs)
         for conf in confs:
             set_joint_positions(self.robot, self.ik_joints, conf)
             collision_info = self.check_collision()

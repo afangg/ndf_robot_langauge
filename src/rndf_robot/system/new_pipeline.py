@@ -21,7 +21,7 @@ from IPython import embed
 
 config = dict(
     # objects={'mug': {(1,0,0.1,1):1, (0,0.5,0.8,1):1}}
-    objects = {'mug': {(0,1,0.1,1):1}, 'container': {(0,0.5,0.8,1):1}}
+    objects = {'mug': {(0,1,0.1,1):1}, 'tray': {(0,0.5,0.8,1):1}}
 )
 class Pipeline:
 

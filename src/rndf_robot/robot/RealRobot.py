@@ -24,7 +24,8 @@ class RealRobot(Robot):
     # Setup
 
     def setup_robot(self):
-        self.ik_helper = FrankaIK(gui=True, base_pos=[0, 0, 0], occnet=False, robotiq=(self.args.gripper_type=='2f140'), mc_vis=self.mc_vis)
+        self.ik_helper = FrankaIK(gui=True, base_pos=[0, 0, 0], robotiq=(self.args.gripper_type=='2f140'), mc_vis=self.mc_vis)
+        # self.ik_helper = FrankaIK(gui=True, base_pos=[0, 0, 0])
         franka_ip = "173.16.0.1" 
         panda = RobotInterface(ip_address=franka_ip)
         gripper = GripperInterface(ip_address=franka_ip)
@@ -94,6 +95,9 @@ class RealRobot(Robot):
 
     def get_ee_pose(self):
         return poly_util.polypose2np(self.panda.get_ee_pose())
+
+    def get_jpos(self):
+        return poly_util.polypose2np(self.panda.get_joint_positions())
     
     def gravity_comp(self, on=True):
         if on:
@@ -138,17 +142,20 @@ class RealRobot(Robot):
                 if 1 in self.ranked_objs:
                     del self.ranked_objs[1]
 
-    def execute_traj(self, ee_poses):
-        ee_file = osp.join(path_util.get_llm_descriptions(), 'franka_panda/meshes/robotiq_2f140/full_hand_2f140.obj')
+    def execute(self, ee_poses):
         for i, ee_pose in enumerate(ee_poses):
             pose = util.body_world_yaw(util.list2pose_stamped(ee_pose), theta=-1.5708)
             pose = util.matrix_from_pose(pose)
-            util.meshcat_obj_show(self.mc_vis, ee_file, pose, 1.0, name=f'ee/ee_{i}')
+            util.meshcat_obj_show(self.mc_vis, self.ee_file, pose, 1.0, name=f'ee/ee_{i}')
 
         jnt_poses = [self.cascade_ik(pose) for pose in ee_poses]
 
         start_pose = None
         joint_traj = []
+        if None in jnt_poses:
+            log_warn('Could not find IKs therefore stopping motion plan')
+            return
+        
         for jnt_pose in jnt_poses:
             input('Press enter to show next plan')
             # if not execute:
@@ -210,9 +217,9 @@ class RealRobot(Robot):
             elif i == 'e':
                 confirm = input('Should we execute (y/n)???')
                 if confirm == 'y':
-                    self.pre_execution()
+                    self.execute_pre_step()
                     self.planning.execute_loop(joint_traj)
-                    self.post_execution()
+                    self.execute_post_step()
 
                 continue
             elif i == 'b':

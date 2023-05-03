@@ -17,6 +17,7 @@ import rndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_networ
 from rndf_robot.data.rndf_utils import infer_relation_intersection, create_target_descriptors
 
 from airobot import log_debug, log_warn, log_info
+from IPython import embed
 
 DELIM = '--rndf_weights--'
 TABLE_OBJ = {'shelf': 0, 'rack': 1}
@@ -106,7 +107,7 @@ DOCSTRINGS = {
               }
 class NDFLibrary:
 
-    def __init__(self, args, folder='sim_demos', obj_classes=set(), obj_models={}) -> None:
+    def __init__(self, args, mc_vis, cfg, folder, obj_classes=set(), obj_models={}) -> None:
         '''
         Library of NDF skills
 
@@ -123,9 +124,12 @@ class NDFLibrary:
         default_models (dict): Maps object class to pre-defined models
         '''
         self.args = args
-        self.original_folder = folder
+        self.mc_vis = mc_vis
+        self.cfg = cfg
+        self.folder = folder
         self.ndf_primitives = {'grasp': {'obj_classes': set(), 'geometry': set()}, 
-                               'place': {'obj_classes': set(), 'geometry': set()}}
+                               'place': {'obj_classes': set(), 'geometry': set()},
+                               'place_relative': {'obj_classes': set(), 'geometry': set()}}
         self.obj_classes = obj_classes
         self.default_demos = self.load_default_demos()
         self.default_models = obj_models
@@ -141,7 +145,7 @@ class NDFLibrary:
         Load in the primitives from the NDF demos saved in rndf_robot/demos/sim_demos
 
         '''
-        all_demos = osp.join(path_util.get_rndf_demos(), self.original_folder)
+        all_demos = osp.join(path_util.get_rndf_demos(), self.folder)
         demo_dic = {}
         for demo_type in os.listdir(all_demos):
             demo_type_path = osp.join(all_demos, demo_type)
@@ -169,32 +173,38 @@ class NDFLibrary:
 
     def get_model_path_for_class(self, obj_class):
         if obj_class in self.default_models:
-            return self.default_models[obj_class]
-        else:
-            default_model_path = 'ndf_vnn/ndf_'+obj_class+'.pth'
-            assert osp.exists(default_model_path), 'Default model path not found and no path was specified'
+            obj_weight = self.default_models[obj_class]
+            default_model_path = osp.join('ndf_vnn', obj_weight)
             return default_model_path
+        else:
+            model_path = input('Please specify the model path from model_weights')
+            return model_path
+        
+    ###########################################################################################################
+    # Demo Reading
 
-    def get_ndf_demo_info(self, demo_name, geometry, n=None):
+    def get_ndf_demo_info(self, demo_name, geometry):
         demos = self.default_demos.get(demo_name, [])
-        assert demos, f'There are no demos for {demo_name}'
+        if not demos:
+            print(f'There are no demos for {demo_name}')
+            return
         
         table_obj = TABLE_OBJ.get(geometry, None)
 
         demo_dic = {'demo_info': [], 'demo_ids': [], 'demo_start_poses': []}
-        for demo_npz in demos[:min(n, len(demos))]:
+        for demo_npz in demos:
             demo = np.load(demo_npz, allow_pickle=True)
             obj_id = None
             if 'shapenet_id' in demo:
                 obj_id = demo['shapenet_id'].item()
 
             if demo_name.startswith('grasp'):
-                target_info, initial_pose = process_demo_data(demo, initial_pose = None, table_obj=None)
+                target_info, initial_pose = process_demo_data(demo, initial_pose = None, table_obj=table_obj)
                 demo_dic['demo_start_poses'].append(initial_pose)
             elif demo_name.startswith('place'):
                 grasp_pose = util.pose_stamped2list(util.unit_pose())
                 grasp_pose = None
-                target_info, _ = process_demo_data(demo, grasp_pose, table_obj=self.table_obj)
+                target_info, _ = process_demo_data(demo, grasp_pose, table_obj=table_obj)
                 if not target_info: continue
             else:
                 raise NotImplementedError("Unsure how to read these demos")
@@ -208,16 +218,19 @@ class NDFLibrary:
         
         demo_dic['query_pts'] = process_xq_data(demo, table_obj=table_obj)
         demo_dic['query_pts_rs'] = process_xq_rs_data(demo, table_obj=table_obj)
+        demo_dic['demo_ids'] = frozenset(demo_dic['demo_ids'])
+
         log_debug('Finished loading single descriptors')
         return demo_dic
     
-    def get_rndf_demo_info(self, demo_name, n=None):
-        demo_path = osp.join(path_util.get_rndf_demos(), self.original_folder, demo_name)
+    def get_rndf_demo_info(self, demo_name):
+        demo_path = osp.join(path_util.get_rndf_demos(), self.folder, demo_name)
         demo_dic = {0: {}, 1: {}}
 
         log_warn('Using the first set of descriptors found')
-        relational_model_path, target_model_path = find_all_rndf_descriptor_models(demo_path[0])[0]
-        desc_subdir = get_rndf_desc_subdir(demo_path, relational_model_path, target_model_path, create=False)
+        descriptor_models = find_rndf_descriptor_models(demo_path)
+        relational_model_path, target_model_path = descriptor_models[0]
+        desc_subdir = get_rndf_desc_subdir(demo_path, relational_model_path, target_model_path)
         desc_demo_npz = osp.join(demo_path, desc_subdir, 'target_descriptors.npz')
         if not osp.exists(desc_demo_npz):
             log_warn('Descriptor file not found')
@@ -233,14 +246,12 @@ class NDFLibrary:
         #slow - change deepcopy to shallow copy? 
         demo_dic[0]['query_pts'] = copy.deepcopy(target_descriptors_data['parent_query_points'])
         log_debug('Finished loading relational descriptors')
-        return demo_dic
+        return demo_dic, relational_model_path, target_model_path
     
     ###########################################################################################################
     # Template
-    #from IPython import embed
     def get_primitive_templates(self):
         output = []
-        #embed()
         for primitive in DOCSTRINGS:
             primitive_desc = {'description': DOCSTRINGS[primitive],'fn': primitive }
 
@@ -263,25 +274,20 @@ class NDFLibrary:
     
     ###########################################################################################################
     #Optimization
-
-    def get_optimizer_and_demos(self, obj_class, demo_name, geometry, rndf=False):
-        if not rndf:
-            demo_dic = self.get_ndf_demo_info(demo_name, geometry)
-        else:
-            demo_dic = self.get_rndf_demo_info(demo_name)
     
-        model_path = self.get_model_path_for_class(obj_class)
-        optimizer = self.load_optimizer(self.load_model(model_path))
-        return optimizer, demo_dic
-    
-    def load_optimizer(self, model, query_pts, query_pts_rs=None):
+    def get_optimizer(self, obj_class, query_pts, query_pts_rs=None, model_path=None):
+        if model_path is None:
+            model_path = self.get_model_path_for_class(obj_class)
+        model = load_model(model_path)
+        # query_pts_rs = query_pts if query_pts_rs is None else query_pts_rs
+        query_pts_rs = query_pts
         optimizer = OccNetOptimizer(
             model,
             query_pts=query_pts,
-            query_pts_real_shape=query_pts_rs if not query_pts_rs else query_pts,
+            query_pts_real_shape=query_pts_rs,
             opt_iterations=self.args.opt_iterations,
-            cfg=self.args.cfg.OPTIMIZER)
-        optimizer.setup_meshcat(self.viz.mc_vis)
+            cfg=self.cfg.OPTIMIZER)
+        optimizer.setup_meshcat(self.mc_vis)
         return optimizer
 
     ###########################################################################################################
@@ -320,11 +326,12 @@ class NDFLibrary:
         assert obj_class in self.obj_classes, "Object class doesn't have skills"
 
         demo_name = f'grasp {obj_class}_{geometry}'
-        optimizer, demo_dic = self.get_optimizer_and_demos(obj_class, demo_name, geometry, rndf=False)
+        demo_dic = self.get_ndf_demo_info(demo_name, geometry)
 
+        optimizer = self.get_optimizer(obj_class, demo_dic['query_pts'])
         optimizer.set_demo_info(demo_dic['demo_info'])
         
-        pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=False)
+        pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=True)
         corresponding_pose = util.pose_from_matrix(pose_mats[best_idx])
 
         # grasping requires post processing to find anti-podal point
@@ -362,7 +369,9 @@ class NDFLibrary:
         assert self.inital_poses, "Need to load the grasp demo first"
         
         demo_name = f'place {obj_class}_{geometry}'
-        optimizer, demo_dic = self.get_optimizer_and_demos(obj_class, demo_name, geometry, rndf=False)
+        demo_dic = self.get_ndf_demo_info(demo_name, geometry)
+
+        optimizer = self.get_optimizer(obj_class, demo_dic['query_pts'])
         optimizer.set_demo_info(demo_dic['demo_info'])
         
         pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=False)
@@ -395,19 +404,21 @@ class NDFLibrary:
         target_pcd, target_class = target
         relational_pcd, relational_class = relational
         assert (target_class in self.obj_classes and relational_class in self.obj_classes), "Object class doesn't have skills"
-        demo_name = f'place {target_class}_{geometry}'
-        target_optimizer, demo_dic = self.get_optimizer_and_demos(target_class, demo_name, geometry)
-        rel_optimizer, _ = self.get_optimizer_and_demos(relational_class, demo_name, geometry)
+        demo_name = f'{target_class}_{geometry}'
+        demo_dic, relational_model_path, target_model_path = self.get_rndf_demo_info(demo_name)
+        target_qps = demo_dic[0]['query_pts']
+        relational_qps = demo_dic[1]['query_pts']
+        target_optimizer = self.get_optimizer(target_class, target_qps, model_path=target_model_path)
+        rel_optimizer = self.get_optimizer(relational_class, relational_qps, model_path=relational_model_path)
 
-        relational_target_desc, target_desc = demo_dic[0]['target_desc'], demo_dic[1]['target_desc']
-        relational_query_pts, target_query_pcd = demo_dic[0]['query_pts'], demo_dic[1]['query_pts']
+        target_desc, relational_desc = demo_dic[0]['target_desc'], demo_dic[1]['target_desc']
+        target_query_pts, relational_query_pts = demo_dic[0]['query_pts'], demo_dic[1]['query_pts']
 
-        self.viz.pause_mc_thread(True)
         corresponding_mat = infer_relation_intersection(
-            self.viz.mc_vis, rel_optimizer, target_optimizer, 
-            relational_target_desc, target_desc, 
-            relational_pcd, target_pcd, relational_query_pts, target_query_pcd, opt_visualize=self.args.opt_visualize)
-        self.viz.pause_mc_thread(False)
+            self.mc_vis, rel_optimizer, target_optimizer, 
+            relational_desc, target_desc, 
+            relational_pcd, target_pcd, relational_query_pts, 
+            target_query_pts, opt_visualize=self.args.opt_visualize)
 
         corresponding_pose = util.pose_from_matrix(corresponding_mat)
         corresponding_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=corresponding_pose)
@@ -444,7 +455,7 @@ class NDFLibrary:
 NOISE_VALUE_LIST = [0.01, 0.02, 0.03, 0.04, 0.06, 0.08, 0.16, 0.24, 0.32, 0.4]
 
 def read_rndf_demos(self, demo_name, n=None):
-    demo_path = [osp.join(path_util.get_rndf_demos(), self.original_folder, demo_name)]
+    demo_path = [osp.join(path_util.get_rndf_demos(), self.folder, demo_name)]
     assert osp.exists(demo_path), f'{demo_path} does not exist'
     demo_dic = {0: {}, 1: {}}
 
@@ -474,7 +485,7 @@ def read_rndf_demos(self, demo_name, n=None):
     return demo_dic
 
 def create_rndf_descriptior(self, demo_name, demo_dic, parent_model, child_model, args):
-    demo_path = osp.join(path_util.get_rndf_demos(), self.original_folder, demo_name)
+    demo_path = osp.join(path_util.get_rndf_demos(), self.folder, demo_name)
     parent_model_path =  osp.join(path_util.get_rndf_model_weights(), parent_model)
     child_model_path =  osp.join(path_util.get_rndf_model_weights(), child_model)
     
@@ -495,7 +506,7 @@ def create_rndf_descriptior(self, demo_name, demo_dic, parent_model, child_model
 
             create_target_descriptors(
                 parent_model, child_model, demo_dic, target_desc_fname, 
-                args.cfg, query_scale=args.query_scale, scale_pcds=False, 
+                self.cfg, query_scale=args.query_scale, scale_pcds=False, 
                 target_rounds=args.target_rounds, pc_reference=args.pc_reference,
                 skip_alignment=args.skip_alignment, n_demos=n_demos, manual_target_idx=args.target_idx, 
                 add_noise=add_noise, interaction_pt_noise_std=noise_value,
@@ -518,9 +529,12 @@ def get_model_paths_for_dir(descriptor_dirname):
     child_model_path = 'ndf_vnn/' + child_model_path + '.pth'
     return parent_model_path, child_model_path
 
-def find_all_rndf_descriptor_models(demo_path):
+def find_rndf_descriptor_models(demo_path):
     alt_descs = os.listdir(demo_path)
-    assert len(alt_descs) > 0, 'There are no descriptors for this concept. Please generate descriptors first'
+    if not alt_descs: 
+        print('There are no descriptors for this concept. Please generate descriptors first')
+        return
+    
     all_model_paths = []
     for alt_desc in alt_descs:
         if not alt_desc.endswith('.npz'):

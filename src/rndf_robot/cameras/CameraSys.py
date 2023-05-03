@@ -10,25 +10,32 @@ from rndf_robot.cameras.simple_multicam import MultiRealsenseLocal
 from rndf_robot.cameras.realsense import RealsenseLocal, enable_devices
 from rndf_robot.segmentation.pcd_utils import manually_segment_pcd
 
-from airobot import log_warn
-
-from rndf_robot.robot.SimRobot import SimRobot
+from airobot import Robot, log_warn
+from IPython import embed
 class CameraSys:
 
-    def __init__(self, args, mc_vis, sim_robot=None) -> None:
+    def __init__(self, args, mc_vis, cfg, sim_robot=None) -> None:
         self.args = args
         self.mc_vis = mc_vis
-
+        self.cfg = cfg
         if self.args.env_type == 'sim':
-            assert isinstance(sim_robot, SimRobot), "Please pass in a PyBullet Robot"
-            self.sim_robot = sim_robot
+            if not isinstance(sim_robot, Robot):
+                print("Please pass in a PyBullet Robot to setup cams")
+                return
+            else:
+                self.sim_robot = sim_robot
+        self.setup_cams()
 
     def setup_cams(self):
         if self.args.env_type == 'sim':
-            assert self.sim_robot is not None, "Failed to initialize PyBullet cameras. Please pass in the PyBullet robot"
-            self.cams = self.setup_sim_cams()
+            if self.sim_robot is not None:
+                self.cams = self.setup_sim_cams()
+            else:
+                print("Failed to initialize PyBullet cameras. Please pass in the PyBullet robot")
         elif self.args.env_type == 'real':
             self.cams, self.pipelines, self.cam_interface = self.setup_real_cams()
+        else:
+            raise NotImplementedError('CameraSys: Unfamilar env type')
 
     def setup_sim_cams(self):
         self.sim_robot.cam.setup_camera(
@@ -53,7 +60,7 @@ class CameraSys:
         cam_list = [camera_names[int(idx)] for idx in self.args.cam_index]       
         serials = [serials[int(idx)] for idx in self.args.cam_index]
 
-        calib_dir = osp.join(path_util.get_rndf_src(), 'robot/camera_calibration_files')
+        calib_dir = osp.join(path_util.get_rndf_cameras(), 'camera_calibration_files')
         calib_filenames = [osp.join(calib_dir, f'cam_{idx}_calib_base_to_cam.json') for idx in self.args.cam_index]
 
         cams = MultiRealsenseLocal(cam_names=cam_list, calib_filenames=calib_filenames)
@@ -68,12 +75,14 @@ class CameraSys:
         cam_interface = RealsenseLocal()
         return cams, pipelines, cam_interface
     
-    def get_pb_seg(self, obj_ids, crop_show=True):
+    def get_pb_seg(self, obj_id_to_class, table_id=None, link_id=None, crop_show=True):
+        '''
+        obj_id_to_class (dic): {obj_id: obj_class}
+        '''
+
         pc_obs_info = {}
-        pc_obs_info['pcd'] = {} #  
-        pc_obs_info['pcd_pts'] = {} #caption: [[pcd0], [pcd1], ...]
-        for obj_id in obj_ids:
-            pc_obs_info['pcd_pts'][obj_id] = []
+        for obj_id in obj_id_to_class:
+            pc_obs_info[obj_id] = []
 
         all_table_pts = []
         all_table_obj_pts = []
@@ -85,52 +94,55 @@ class CameraSys:
             seg = pyb_seg
             # flatten and find corresponding pixels in segmentation mask
             flat_seg = seg.flatten()
-            for obj_id in obj_ids:
+            for obj_id in obj_id_to_class:
                 obj_inds = np.where(flat_seg == obj_id)                
                 obj_pts = pts_raw[obj_inds[0], :]
                 # pc_obs_info['pcd_pts'][obj_id].append(util.crop_pcd(obj_pts))
-                pc_obs_info['pcd_pts'][obj_id].append(obj_pts)
+                pc_obs_info[obj_id].append(obj_pts)
             
-            table_inds = np.where(flat_seg == self.table_id)                
-            table_pts = pts_raw[table_inds[0], :]
-            all_table_pts.append(table_pts)
-        
-            table_obj_val = self.table_id + ((self.table_obj_link_id+1) << 24)
-            table_obj_inds = np.where(flat_seg == table_obj_val)
-            table_obj_pts = pts_raw[table_obj_inds[0], :]
-            all_table_obj_pts.append(table_obj_pts)
+            if table_id:
+                table_inds = np.where(flat_seg == table_id)                
+                table_pts = pts_raw[table_inds[0], :]
+                all_table_pts.append(table_pts)
+            if link_id:
+                table_obj_val = table_id + ((link_id+1) << 24)
+                table_obj_inds = np.where(flat_seg == table_obj_val)
+                table_obj_pts = pts_raw[table_obj_inds[0], :]
+                all_table_obj_pts.append(table_obj_pts)
 
-        table_pcd = np.concatenate(all_table_pts, axis=0)  # object shape point cloud
-        util.meshcat_pcd_show(self.mc_vis, table_pcd, color=(0,0,255), name='scene/table_pcd')
+        if all_table_pts != []:
+            table_pcd = np.concatenate(all_table_pts, axis=0)  # object shape point cloud
+            util.meshcat_pcd_show(self.mc_vis, table_pcd, color=(0,0,255), name='scene/table_pcd')
 
-        if table_obj_pts.any():
-            table_obj_pts = np.concatenate(all_table_pts, axis=0)  # object shape point cloud
-            util.meshcat_pcd_show(self.mc_vis, table_obj_pts, color=(0,255,0), name='scene/table_obj_pcd')
+        if all_table_obj_pts != []:
+            table_obj_pts = np.concatenate(all_table_obj_pts, axis=0)  # object shape point cloud
+            util.meshcat_pcd_show(self.mc_vis, table_obj_pts, color=(0,100,100), name='scene/table_obj_pcd')
 
         pcds_output = {}
-        for obj_id, obj_pcd_pts in pc_obs_info['pcd_pts'].items():
+        for obj_id, obj_pcd_pts in pc_obs_info.items():
             if not obj_pcd_pts:
                 log_warn(f'WARNING: COULD NOT FIND {obj_id} OBJ')
                 continue
 
             target_obj_pcd_obs = np.concatenate(obj_pcd_pts, axis=0)  # object shape point cloud
-            target_obj_pcd_obs = manually_segment_pcd(target_obj_pcd_obs, mean_inliners=True)
+            target_obj_pcd_obs = manually_segment_pcd(target_obj_pcd_obs, mean_inliers=True)
 
-            if not target_obj_pcd_obs:
+            if not target_obj_pcd_obs.all():
                 log_warn(f'WARNING: COULD NOT FIND {obj_id} OBJ')
                 continue
+            
+            obj_class = obj_id_to_class[obj_id]
+            util.meshcat_pcd_show(self.mc_vis, target_obj_pcd_obs, color=(255, 0, 0), name=f'scene/{obj_class}_{obj_id}')
 
-            util.meshcat_pcd_show(self.mc_vis, target_obj_pcd_obs, color=(0, 255, 0), name=f'scene/cam_{i}_{obj_label}_region_{j}')
-
-            self.obj_info[obj_id]['pcd'] = target_obj_pcd_obs
-            obj_class = self.obj_info[obj_id]['class']
             if obj_class not in pcds_output:
                 pcds_output[obj_class] = []
             pcds_output[obj_class].append((1.0, target_obj_pcd_obs, obj_id))
         return pcds_output
     
     def get_all_real_views(self, crop_show=True):
-        assert self.args.env_type == 'real', "This method is for the realsense camera system"
+        if self.args.env_type != 'real':
+            print("This method is for the realsense camera system")
+            return
         
         rgb_imgs = []
         pcd_pts = []
@@ -153,7 +165,7 @@ class CameraSys:
             pcd_world = util.transform_pcd(pcd_cam, cam_pose_world)
             pcd_world_img = pcd_world.reshape(depth.shape[0], depth.shape[1], 3)
 
-            util.meshcat_pcd_show(self.mc_vis, pcd_world, color=(0, 255, 0), name=f'scene/scene_{idx}')
+            # util.meshcat_pcd_show(self.mc_vis, pcd_world, color=(0, 0, 0), name=f'scene/scene_{idx}')
 
             rgb_imgs.append(rgb)
             pcd_pts.append(pcd_world)
@@ -164,7 +176,8 @@ class CameraSys:
 
         if crop_show:
             cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.4, 0.0], [0.01, 0.35], 'table_right'
-            proc_pcd = manually_segment_pcd(pcd_full, x=cropx, y=cropy, z=cropz, note=crop_note)
+            bounds = (cropx, cropy, cropz)
+            proc_pcd = manually_segment_pcd(pcd_full, bounds=bounds, mean_inliers=True)
         else:
             proc_pcd = pcd_full
         util.meshcat_pcd_show(self.mc_vis, proc_pcd, name=f'scene/pcd_world_cam_{idx}')

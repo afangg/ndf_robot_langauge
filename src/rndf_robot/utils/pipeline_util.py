@@ -296,7 +296,7 @@ def get_ee_offset(ee_pose):
     """
     Gets the updated world frame normal direction of the palms
     """
-    dist = 0.05
+    dist = 0.1
     normal_x = util.list2pose_stamped([dist, 0, 0, 0, 0, 0, 1])
     normal_y = util.list2pose_stamped([0, dist, 0, 0, 0, 0, 1])
     normal_z = util.list2pose_stamped([0, 0, dist, 0, 0, 0, 1])

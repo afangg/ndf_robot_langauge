@@ -1,19 +1,28 @@
-import torch
-
+import os, os.path as osp
 from rndf_robot.data.NDFLibrary import NDFLibrary
+from rndf_robot.utils import path_util
+
 from IPython import embed
 
 class Robot:
-    def __init__(self, args, skill_library: NDFLibrary, mc_vis) -> None:
+    def __init__(self, args, skill_library: NDFLibrary, mc_vis, cfg=None) -> None:
         self.args = args
         self.skill_library = skill_library
         self.mc_vis = mc_vis
+        self.cfg = cfg
+
+        if self.args.gripper_type == 'panda':
+            self.ee_file = osp.join(path_util.get_rndf_descriptions(), 'franka_panda/meshes/panda_hand_full.obj')
+        elif self.args.gripper_type == '2f140':
+            self.ee_file = osp.join(path_util.get_rndf_descriptions(), 'franka_panda/meshes/robotiq_2f140/full_hand_2f140.obj')
+
         self.gripper_is_open = False
         self.state =-1 # -1 home, 0 to grasp, 1 to place, # 2 to teleport 
 
         self.last_ee_pose = None
-        self.FUNCTIONS = {'grasp': self.grasp, 'place': self.place, 'place_relative': self.place_relative, 'find': self.find}
-        self.go_home()
+
+        self.setup_robot()
+        self.setup_table()
 
     #################################################################################################
     # Setup
@@ -34,6 +43,9 @@ class Robot:
     def get_ee_pose(self):
         pass
 
+    def get_jpos(self):
+        pass
+
     def gravity_comp(self, on=True):
         raise NotImplementedError('Gravity comp mode not available')
 
@@ -42,13 +54,7 @@ class Robot:
     def go_home(self):
         pass
 
-    def execute_pre_step(self):
-        pass
-
-    def execute_post_step(self):
-        pass
-
-    def execute_traj(self, ee_poses):
+    def execute(self, ee_poses):
         pass
 
     #################################################################################################
@@ -73,9 +79,7 @@ class Robot:
         '''
         target_pcd, target_class = target
         ee_poses = self.skill_library.grasp(target_pcd, target_class, geometry)
-        self.execute_pre_step()
-        sucess = self.execute_traj(ee_poses)
-        self.execute_post_step()
+        self.execute(ee_poses)
         # self.ee_poses = ee_poses[-1] if sucess else None
         return self.last_ee_pose
     
@@ -98,9 +102,7 @@ class Robot:
         '''
         target_pcd, target_class = target
         ee_poses = self.skill_library.place(target_pcd, target_class, geometry, self.get_ee_pose())
-        self.execute_pre_step()
-        sucess = self.execute_traj(ee_poses)
-        self.execute_post_step()
+        self.execute(ee_poses)
         # self.last_ee_pose = ee_poses[-1] if sucess else None
         return self.last_ee_pose
     
@@ -123,9 +125,7 @@ class Robot:
             new_position (Array-like, length 3): Final position of the EE, after performing the move action.
                 If grasp fails, returns None
         '''
-        ee_poses = self.skill_library.place_relative(target, relational, geometry, self.ee_pose)
-        self.execute_pre_step()
-        sucess = self.execute_traj(ee_poses)
-        self.execute_post_step()
+        ee_poses = self.skill_library.place_relative(target, relational, geometry, self.get_ee_pose())
+        self.execute(ee_poses)
         # self.last_ee_pose = ee_poses[-1] if sucess else None
         return self.last_ee_pose

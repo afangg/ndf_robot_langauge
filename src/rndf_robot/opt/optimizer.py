@@ -1,17 +1,10 @@
-import os, os.path as osp
-import copy
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
 import numpy as np
 import trimesh
-import meshcat, meshcat.geometry as mcg
 
-from airobot import log_info, log_warn, log_debug, log_critical
+from airobot import log_warn, log_debug
 
-from rndf_robot.utils import util, torch_util, trimesh_util, torch3d_util
-from rndf_robot.utils.plotly_save import plot3d
+from rndf_robot.utils import util, torch_util, torch3d_util
 
 
 class OccNetOptimizer:
@@ -322,12 +315,6 @@ class OccNetOptimizer:
 
                 in_pts = eval_pts[in_inds]
                 self._scene_dict()
-                plot3d(
-                    [in_pts, shape_np],
-                    ['blue', 'black'], 
-                    # osp.join(self.debug_viz_path, 'recon_overlay.html'),
-                    scene_dict=self.scene_dict,
-                    z_plane=False)
 
             ###############################################################################
 

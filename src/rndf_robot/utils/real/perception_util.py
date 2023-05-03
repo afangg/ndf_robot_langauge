@@ -8,7 +8,7 @@ import open3d
 import pyrealsense2 as rs
 
 from rndf_robot.utils import util
-from rndf_robot.utils.record_demo_utils import manually_segment_pcd
+from rndf_robot.segmentation.pcd_utils import manually_segment_pcd
 
 
 class PerceptionHelper:

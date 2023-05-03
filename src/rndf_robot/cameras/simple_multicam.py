@@ -20,7 +20,6 @@ class MultiRealsenseLocal:
 
         # for i in range(1, n_cam+1):
         for i, name in enumerate(self.names):
-            print('Initializing camera %s' % name)
             
             cam_cfg = self._camera_cfgs(name)
             cam = RGBDCamera(cfgs=cam_cfg)

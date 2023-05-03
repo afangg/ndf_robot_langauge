@@ -1,10 +1,11 @@
 from airobot import log_debug
-from .language_utils import MiniLM
+from .language_utils import MiniLM, identify_classes_from_query
 
 class PromptModule:
-    def __init__(self, skill_names) -> None:
+    def __init__(self, skill_names, obj_classes) -> None:
         self.langInterpreter = MiniLM()
-        self.skill_names = skill_names    
+        self.skill_names = skill_names   
+        self.obj_classes = obj_classes 
 
     def prompt_user(self):
         '''
@@ -18,9 +19,9 @@ class PromptModule:
             query = self.ask_query()
             # query = "grasp mug_handle", "grab the mug by the handle"
             if not query: return
-            corresponding_concept, query_text = query
+            best_skill, query_text = query
             break
-        return corresponding_concept, query_text
+        return best_skill, query_text
 
     def ask_query(self):
         '''
@@ -33,28 +34,32 @@ class PromptModule:
             if not query_text: continue
             if query_text.lower() == "reset": return
             ranked_concepts = self.langInterpreter.find_correspondence(self.skill_names, query_text)
-            corresponding_concept = None
+            best_skill = None
             for concept in ranked_concepts:
                 print('Corresponding concept:', concept)
                 correct = input('Corrent concept? (y/n)\n')
                 if correct == 'n':
                     continue
                 elif correct == 'y':
-                    corresponding_concept = concept
+                    best_skill = concept
                     break
             
-            if corresponding_concept:
+            if best_skill:
                 break
-        return corresponding_concept, query_text
+        return best_skill, query_text
     
     def get_keywords_and_classes(self, prompt, state):
-        corresponding_skill, query_text = prompt
-        return self.langInterpreter.identify_classes_from_query(state, query_text, corresponding_skill)
+        best_skill, query_text = prompt
+        demo_folder = best_skill[best_skill.find(' ')+1:]
+        return identify_classes_from_query(state, 
+                                           query_text, 
+                                           demo_folder, 
+                                           self.obj_classes)
     
     def decompose_demo(self, prompt):
         #ie. grasp mug_handle
-        corresponding_skill, query_text = prompt
-        action, rest = corresponding_skill[:corresponding_skill.find(' ')+1], corresponding_skill[corresponding_skill.find(' ')+1:]
-        rest = rest.split(' ')
-        obj_class, geometry = rest[0], rest[1:]
+        best_skill, _ = prompt
+        action, folder_name = best_skill[:best_skill.find(' ')], best_skill[best_skill.find(' ')+1:]
+        folder_name = folder_name.split('_')
+        _, geometry = folder_name[0], folder_name[1:][0]
         return action, geometry

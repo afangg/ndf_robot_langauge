@@ -1,10 +1,12 @@
+import torch
+import numpy as np
 from sentence_transformers import SentenceTransformer
 from sentence_transformers.util import dot_score
 from flair.models import SequenceTagger
 from flair.data import Sentence
 
-import torch
-import numpy as np
+from airobot import log_warn, log_debug
+
 ARTICLES = {'a', 'an', 'the'}
 
 tagger = SequenceTagger.load('flair/chunk-english')
@@ -30,7 +32,7 @@ class MiniLM:
         idx = idx.detach().cpu().numpy()
         return np.array(existing_concepts)[idx]
 
-def chunk_query(self, query):
+def chunk_query(query):
     '''
     Decomposes a query text into a dictionary mapping phrases to part of speech and returns it
     ex. Phrase tags: adjectival, adverbial, noun phrase, preposition, particle, verb phrase, etc.
@@ -38,7 +40,7 @@ def chunk_query(self, query):
     return: {phrase: label}
     '''
     sentence = Sentence(query)
-    self.tagger.predict(sentence)
+    tagger.predict(sentence)
     sentence_dic = {}
     for label in sentence.get_labels():
         sentence_dic[label.data_point.text] = label.value
@@ -72,7 +74,7 @@ def create_keyword_dic(relevant_objs, sentence_dic):
         
     return keywords
 
-def identify_classes_from_query(query, corresponding_concept, potential_classes):
+def identify_classes_from_query(state, query_text, demo_folder, potential_classes):
     '''
     Takes a query and skill concept and identifies the relevant object classes to execute the skill.
     
@@ -81,12 +83,12 @@ def identify_classes_from_query(query, corresponding_concept, potential_classes)
 
     returns: the key for the set of demos relating to the concept (just the {concept} part)
     '''
-    concept_key = corresponding_concept[corresponding_concept.find(' ')+1:]
-    concept_language = frozenset(concept_key.lower().replace('_', ' ').split(' '))
+    concept_language = frozenset(demo_folder.lower().replace('_', ' ').split(' '))
     relevant_classes = concept_language.intersection(potential_classes)
-    chunked_query = chunk_query(query)
+    chunked_query = chunk_query(query_text)
     keywords = create_keyword_dic(relevant_classes, chunked_query)
-    rank_to_class = get_relevent_nouns(keywords)
+    keyword_copy = keywords.copy()
+    rank_to_class = get_relevent_nouns(keyword_copy, state)
     return keywords, rank_to_class
 
 def get_relevent_nouns(keywords, state, assigned=None):
@@ -95,6 +97,7 @@ def get_relevent_nouns(keywords, state, assigned=None):
     @keywords: list of associated obj class, noun phrase, and verb flag as pairs of tuples in form (class, NP, True/False)
     '''
     # what's the best way to determine which object should be manipulated and which is stationary automatically?
+    
     rank_to_class = {}
     if state == 0:
         # only one noun phrase mentioned, probably the object to be moved
@@ -142,3 +145,4 @@ def get_relevent_nouns(keywords, state, assigned=None):
     if 1 in rank_to_class:
         relation = 'Relational - class:%s, descr: %s'% (rank_to_class[1]['potential_class'], rank_to_class[1]['description'])
         log_debug(relation)
+    return rank_to_class

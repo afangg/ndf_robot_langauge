@@ -73,7 +73,7 @@ def filter_pcds(pcds, scores, bounds=None, mean_inliers=False, downsample=False,
     filtered_scores = []
     for i, full_pcd in enumerate(pcds):
         obj_pcd = manually_segment_pcd(full_pcd, bounds=bounds, mean_inliers=mean_inliers, downsample=downsample, show=show)
-        if obj_pcd:
+        if obj_pcd.all():
             filtered_pcds.append(obj_pcd)
             filtered_scores.append(scores[i])
             log_debug(f'pcd of size {len(obj_pcd)} with score {scores[i]}')
@@ -108,17 +108,10 @@ def manually_segment_pcd(full_pcd, bounds=None, mean_inliers=False, downsample=F
 
     return crop_pcd
 
-def pcds_from_masks(full_pcd, depth_valid, masks, scores, is_bbox=False, clustering=False):
+def pcds_from_masks(full_pcd, depth_valid, masks, scores, clustering=False):
     masked_regions = []
     masked_scores = []
-    for i, mask_i in enumerate(masks):
-        if is_bbox:
-            xmin,ymin,xmax,ymax, = mask_i
-            mask = np.zeros(depth_valid.shape)
-            mask[xmin:xmax+1, ymin:ymax+1] = 1
-        else:
-            mask = mask_i
-
+    for i, mask in enumerate(masks):
         camera_mask = depth_valid != 0
         camera_binary = np.zeros(depth_valid.shape)
         camera_binary[camera_mask] = 1
@@ -126,16 +119,12 @@ def pcds_from_masks(full_pcd, depth_valid, masks, scores, is_bbox=False, cluster
 
         cropped_pcd = full_pcd[joined_mask]
         flat_pcd = cropped_pcd.reshape((-1, 3))
-        np.random.shuffle(flat_pcd)
-        downsampled_region = flat_pcd[::3]
-        if not downsampled_region.any():
-            continue
 
         if clustering:
-            largest = get_largest_pcd(downsampled_region)
-            downsampled_region = largest
+            largest = get_largest_pcd(flat_pcd)
+            flat_pcd = largest
 
-        masked_regions.append(downsampled_region)
+        masked_regions.append(flat_pcd)
         masked_scores.append(scores[i])
     if masked_regions:
         pass

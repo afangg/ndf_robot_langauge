@@ -17,6 +17,12 @@ def get_rndf_data():
     return osp.join(get_rndf_src(), 'data')
 
 
+def get_rndf_demos():
+    return osp.join(get_rndf_src(), 'data')
+
+def get_rndf_cameras():
+    return osp.join(get_rndf_src(), 'cameras')
+
 def get_rndf_recon_data():
     return osp.join(get_rndf_src(), 'data_gen/data')
 
