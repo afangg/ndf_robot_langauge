@@ -17,7 +17,8 @@ from airobot import log_info, log_warn, log_debug, log_critical, set_log_level
 sys.path.append(os.environ['SOURCE_DIR'])
 
 import rndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_network
-from rndf_robot.utils import util, path_util, trimesh_util
+from rndf_robot.utils import util, trimesh_util
+from rndf_robot.utils import path_util
 
 from rndf_robot.utils.franka_ik_ndf import FrankaIK
 from rndf_robot.opt.optimizer import OccNetOptimizer
@@ -30,17 +31,19 @@ from rndf_robot.utils.pipeline_util import (
     get_ee_offset,
 )
 
-from rndf_robot.data.rndf_utils import infer_relation_intersection, create_target_descriptors
+from rndf_robot.utils.rndf_utils import infer_relation_intersection, create_target_descriptors
+from system_utils.segmentation import detect_bbs, apply_pcd_mask, apply_bb_mask, extend_pcds, filter_pcds
+from system_utils.sam_seg import get_masks, get_mask_from_bb, get_mask_from_pt, Annotate
 from system_utils.language import chunk_query, create_keyword_dic
 from system_utils.language import query_correspondance
 from system_utils.demos import all_demos, get_concept_demos, create_target_desc_subdir, get_model_paths
 import system_utils.objects as objects
 
 from rndf_robot.utils.visualize import PandaHand, Robotiq2F140Hand
-from rndf_robot.segmentation.pcd_utils import filter_pcds, pcds_from_masks, extend_pcds, manually_segment_pcd
+from rndf_robot.utils.record_demo_utils import manually_segment_pcd
 
-from rndf_robot.robot.franka_ik import FrankaIK #, PbPlUtils
-from rndf_robot.cameras.simple_multicam import MultiRealsenseLocal
+from rndf_robot.utils.franka_ik import FrankaIK #, PbPlUtils
+from rndf_robot.robot.simple_multicam import MultiRealsenseLocal
 
 from rndf_robot.config.default_multi_realsense_cfg import get_default_multi_realsense_cfg
 from rndf_robot.utils.real.traj_util import PolymetisTrajectoryUtil
@@ -48,8 +51,8 @@ from rndf_robot.utils.real.plan_exec_util import PlanningHelper
 from rndf_robot.utils.real.perception_util import enable_devices
 from rndf_robot.utils.real.polymetis_util import PolymetisHelper
 
-from rndf_robot.cameras.simple_multicam import MultiRealsenseLocal
-from rndf_robot.cameras.realsense import RealsenseLocal, enable_devices, pipeline_stop
+from rndf_robot.robot.simple_multicam import MultiRealsenseLocal
+from rndf_robot.system.system_utils.realsense import RealsenseLocal, enable_devices, pipeline_stop
 
 from IPython import embed;
 
@@ -72,18 +75,17 @@ class Pipeline():
         random.seed(self.args.seed)
         np.random.seed(self.args.seed)
 
+        if args.debug:
+            set_log_level('debug')
+        else:
+            set_log_level('info')
+        
         self.mc_vis = meshcat.Visualizer(zmq_url=f'tcp://127.0.0.1:{self.args.port_vis}')
         self.mc_vis['scene'].delete()
         self.mc_vis['optimizer'].delete()
         self.mc_vis['ee'].delete()
 
-        random.seed(self.args.seed)
-        np.random.seed(self.args.seed)
-
-        if args.debug:
-            set_log_level('debug')
-        else:
-            set_log_level('info')
+        log_debug('Done with init')
 
     def next_iter(self):
         while True:
@@ -161,6 +163,17 @@ class Pipeline():
             planning.gripper_open()
             self.gripper_is_open = True
 
+        # if self.args.gripper_type == '2f140':
+        #     grasp_pose_viz = Robotiq2F140Hand(grasp_frame=False)
+        #     place_pose_viz = Robotiq2F140Hand(grasp_frame=False)
+        # else:
+        #     grasp_pose_viz = PandaHand(grasp_frame=True)
+        #     place_pose_viz = PandaHand(grasp_frame=True)
+        # grasp_pose_viz.reset_pose()
+        # place_pose_viz.reset_pose()
+        # grasp_pose_viz.meshcat_show(self.mc_vis, name_prefix='grasp_pose')
+        # place_pose_viz.meshcat_show(self.mc_vis, name_prefix='place_pose')
+
         self.planning = planning
         self.panda = panda
 
@@ -220,7 +233,17 @@ class Pipeline():
         i = input('Take it home (y/n)?')
         if i == 'y':
             self.planning.execute_loop(current_panda_plan)            
-         
+            # self.planning.gripper_open()
+            # self.gripper_is_open = True
+
+    # def test_execution(self, current_panda_plan):
+    #     if len(current_panda_plan) == 0:
+    #         print('\n\nCurrent panda plan is empty!')
+
+    #     self.planning.execute_pb_loop(current_panda_plan)
+    #     confirm = input('Confirm execution (y/n)' )
+    #     if confirm == 'y':
+    #         self.planning.execute_loop(current_panda_plan)            
 
     #################################################################################################
     # Loading config settings and files
@@ -240,17 +263,153 @@ class Pipeline():
             log_info('Config file %s does not exist, using defaults' % config_fname)
         cfg.freeze()
         return cfg
+    #################################################################################################
+    # Language
+    
+    def prompt_user(self):
+        '''
+        Prompts the user to input a command and finds the demos that relate to the concept.
+        Moves to the next state depending on the input
+
+        return: the concept most similar to their query and their input text
+        '''
+        log_debug('All demo labels: %s' %all_demos.keys())
+        while True:
+            query = self.ask_query()
+            # query = "grasp mug_handle", "grab the mug by the handle"
+            if not query: return
+            corresponding_concept, query_text = query
+            demos = get_concept_demos(corresponding_concept)
+            if not len(demos):
+                log_warn('No demos correspond to the query! Try a different prompt')
+                continue
+            else:
+                log_debug('Number of Demos %s' % len(demos)) 
+                break
+        
+        self.skill_demos = demos
+        if corresponding_concept.startswith('grasp'):
+            self.state = 0
+        elif corresponding_concept.startswith('place'):
+            self.state = 1
+        # elif corresponding_concept.startswith('place') and self.state == -1:
+        #     self.state = 2
+        log_debug('Current State is %s' %self.state)
+        return corresponding_concept, query_text
+
+    def ask_query(self):
+        '''
+        Prompts the user to input a command and identifies concept
+
+        return: the concept most similar to their query and their input text
+        '''
+        concepts = list(all_demos.keys())
+        while True:
+            query_text = input('Please enter a query or \'reset\' to reset the scene\n')
+            if not query_text: continue
+            if query_text.lower() == "reset": return
+            ranked_concepts = query_correspondance(concepts, query_text)
+            corresponding_concept = None
+            for concept in ranked_concepts:
+                print('Corresponding concept:', concept)
+                correct = input('Corrent concept? (y/n)\n')
+                if correct == 'n':
+                    continue
+                elif correct == 'y':
+                    corresponding_concept = concept
+                    break
+            
+            if corresponding_concept:
+                break
+        return corresponding_concept, query_text
+
+
+    def identify_classes_from_query(self, query, corresponding_concept):
+        '''
+        Takes a query and skill concept and identifies the relevant object classes to execute the skill.
+        
+        @query: english input for the skill
+        @corresponding_concept: concept in the form 'grasp/place {concept}'
+
+        returns: the key for the set of demos relating to the concept (just the {concept} part)
+        '''
+        all_obj_classes = set(objects.mesh_data_dirs.keys())
+        concept_key = corresponding_concept[corresponding_concept.find(' ')+1:]
+        concept_language = frozenset(concept_key.lower().replace('_', ' ').split(' '))
+        relevant_classes = concept_language.intersection(all_obj_classes)
+        chunked_query = chunk_query(query)
+        keywords = create_keyword_dic(relevant_classes, chunked_query)
+        self.assign_classes(keywords)
+        return concept_key, keywords
+
+    def assign_classes(self, keywords):
+        '''
+        @test_objs: list of relevant object classes to determine rank for
+        @keywords: list of associated obj class, noun phrase, and verb flag as pairs of tuples in form (class, NP, True/False)
+        '''
+        # what's the best way to determine which object should be manipulated and which is stationary automatically?
+        if self.state == 0:
+            # only one noun phrase mentioned, probably the object to be moved
+            keyword = keywords.pop()
+            self.ranked_objs[0] = {}
+            self.ranked_objs[0]['description'] = keyword[1]
+            self.ranked_objs[0]['potential_class'] = keyword[0]
+        else:
+            if self.state == 1 and 0 in self.ranked_objs:
+                old_keywords = keywords.copy()
+                keywords = []
+                if len(old_keywords) >= 1:
+                    for pair in old_keywords:
+                        # check if the obj class mentioned in noun phrase same as object to be moved
+                        if pair[0] != self.ranked_objs[0]['potential_class']:
+                            keywords.append(pair)   
+
+            if len(keywords) == 1:
+                priority_rank = 0 if 0 not in self.ranked_objs else 1
+                keyword = keywords.pop()
+                self.ranked_objs[priority_rank] = {}
+                self.ranked_objs[priority_rank]['description'] = keyword[1]
+                self.ranked_objs[priority_rank]['potential_class'] = keyword[0]
+            else:
+                log_warn('There is still more than one noun mentioned in the query')
+                if len(keywords) == 2:
+                    pair_1, pair_2 = keywords
+                    if pair_1[2]:
+                        classes_to_assign = [pair_1, pair_2]
+                    elif pair_2[2]:
+                        classes_to_assign = [pair_2, pair_1]
+                    else:
+                        log_warn("Unsure which object to act on, just going in order of prompt")
+                        classes_to_assign = [pair_2, pair_1]
+
+                else:
+                    classes_to_assign = keywords
+                for i in range(len(classes_to_assign)):
+                    self.ranked_objs[i] = {}
+                    self.ranked_objs[i]['description'] = classes_to_assign[i][1]
+                    self.ranked_objs[i]['potential_class'] = classes_to_assign[i][0]
+
+        target = 'Target - class:%s, descr: %s'% (self.ranked_objs[0]['potential_class'], self.ranked_objs[0]['description'])
+        log_debug(target)
+        if 1 in self.ranked_objs:
+            relation = 'Relational - class:%s, descr: %s'% (self.ranked_objs[1]['potential_class'], self.ranked_objs[1]['description'])
+            log_debug(relation)
 
     #################################################################################################
     # Segment the scene
 
-    def assign_pcds(self, labels_to_pcds, re_seg=False):
-        # pick the pcd with the highest score
+    def assign_pcds(self, labels_to_pcds):
+        assigned_centroids = []
+        for obj_rank, obj in self.ranked_objs.items():
+            if 'pcd' in obj:
+                assigned_centroids.append(np.average(obj['pcd'], axis=0))
+        assigned_centroids = np.array(assigned_centroids)
+        # pick the pcd with the most pts
         for label in labels_to_pcds:
             labels_to_pcds[label].sort(key=lambda x: x[0])
 
         for obj_rank in self.ranked_objs:
-            if not re_seg and 'pcd' in self.ranked_objs[obj_rank]: continue
+            # if 'pcd' in self.ranked_objs[obj_rank]: continue
             description = self.ranked_objs[obj_rank]['description']
             obj_class = self.ranked_objs[obj_rank]['potential_class']
 
@@ -265,7 +424,11 @@ class Pipeline():
             new_pcds = []
             for pcd_tup in labels_to_pcds[pcd_key]:
                 score, pcd = pcd_tup
-
+                if assigned_centroids.any():
+                    diff = assigned_centroids-np.average(pcd, axis=0)
+                    centroid_dists = np.sqrt(np.sum(diff**2,axis=-1))
+                    if min(centroid_dists) <= 0.05:
+                        continue
                 new_pcds.append(pcd)
             self.ranked_objs[obj_rank]['pcd'] = new_pcds.pop(-1)
             if self.args.show_pcds:
@@ -340,6 +503,7 @@ class Pipeline():
     
         cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.4, 0.0], [0.01, 0.35], 'table_right'
         proc_pcd = manually_segment_pcd(pcd_world, x=cropx, y=cropy, z=cropz, note=crop_note)
+        # proc_pcd = pcd_world
         util.meshcat_pcd_show(self.mc_vis, proc_pcd, name=f'scene/pcd_world_cam_{idx}')
 
         return pcd_world_img, depth_valid
@@ -416,9 +580,9 @@ class Pipeline():
 
             for obj_label, obj_masks in all_obj_masks.items():
                 log_debug(f'Region count for {obj_label}: {len(obj_masks)}')
-                obj_pcds, obj_scores = pcds_from_masks(pcd_2d, valid, obj_masks, all_obj_bb_scores[obj_label], is_bbox=False)
+                obj_pcds, obj_scores = apply_pcd_mask(pcd_2d, valid, obj_masks, all_obj_bb_scores[obj_label])
                 log_debug(f'{obj_label} after filtering is now {len(obj_pcds)}')
-                obj_pcds, obj_scores = filter_pcds(obj_pcds, obj_scores, mean_inliers=True)
+                obj_pcds, obj_scores = filter_pcds(obj_pcds, obj_scores)
                 for j in range(len(obj_pcds)):
                     util.meshcat_pcd_show(self.mc_vis, obj_pcds[j], color=(0, 255, 0), name=f'scene/cam_{i}_{obj_label}_region_{j}')
 
@@ -441,15 +605,153 @@ class Pipeline():
 
         for obj_label in captions:
             if obj_label not in label_to_pcds:
-                log_warn(f'WARNING: COULD NOT FIND {obj_label} OBJ')
-                continue
+                log_warn('WARNING: COULD NOT FIND RELEVANT OBJ')
+                break
             obj_pcd_sets = label_to_pcds[obj_label]
             for i, target_obj_pcd_obs in enumerate(obj_pcd_sets):
+                # target_pts_mean = np.mean(target_obj_pcd_obs, axis=0)
+                # inliers = np.where(np.linalg.norm(target_obj_pcd_obs - target_pts_mean, 2, 1) < 0.2)[0]
+                # target_obj_pcd_obs = target_obj_pcd_obs[inliers]
+                # if not target_obj_pcd_obs.any(): continue
                 score = np.average(label_to_scores[obj_label][i])
                 if obj_label not in pcds_output:
                     pcds_output[obj_label] = []
                 pcds_output[obj_label].append((score, target_obj_pcd_obs))
+                # if self.args.debug:
+                #     trimesh_util.trimesh_show([target_obj_pcd_obs])
         return pcds_output        
+
+    #################################################################################################
+    # Process demos
+
+    def load_demos(self, concept):
+        n = self.args.n_demos
+        if 1 in self.ranked_objs:
+            self.get_relational_descriptors(concept, n)
+        else:
+            self.get_single_descriptors(n)
+
+    def get_single_descriptors(self, n=None):
+        self.ranked_objs[0]['demo_info'] = []
+        self.ranked_objs[0]['demo_ids'] = []
+        # don't re-init from pick to place? might not matter for relational descriptors because it saves it
+        if self.state == 0:
+            self.ranked_objs[0]['demo_start_poses'] = {}
+
+        for fname in self.skill_demos[:min(n, len(self.skill_demos))]:
+            demo = np.load(fname, allow_pickle=True)
+            if 'shapenet_id' in demo:
+                obj_id = demo['shapenet_id'].item()
+
+            if self.state == 0:
+                target_info, initial_pose = process_demo_data(demo, initial_pose = None, table_obj=None)
+                self.ranked_objs[0]['demo_start_poses'][obj_id]  = initial_pose
+            else:
+                grasp_pose = util.pose_stamped2list(util.unit_pose())
+                grasp_pose = None
+                target_info, _ = process_demo_data(demo, grasp_pose, table_obj=self.table_obj)
+                if not target_info: continue
+
+            if target_info is not None:
+                self.ranked_objs[0]['demo_info'].append(target_info)
+                self.ranked_objs[0]['demo_ids'].append(obj_id)
+            else:
+                log_debug('Could not load demo')
+
+        # if self.relevant_objs['grasped']:
+        #     scene = trimesh_util.trimesh_show([target_info['demo_obj_pts'],target_info['demo_query_pts_real_shape']], show=True)
+
+        self.ranked_objs[0]['query_pts'] = process_xq_data(demo, table_obj=self.table_obj)
+        self.ranked_objs[0]['query_pts_rs'] = process_xq_rs_data(demo, table_obj=self.table_obj)
+        self.ranked_objs[0]['demo_ids'] = frozenset(self.ranked_objs[0]['demo_ids'])
+        log_debug('Finished loading single descriptors')
+        return True
+
+        # self.initial_poses = initial_poses
+
+    def get_relational_descriptors(self, concept, n=None):
+        for obj_rank in self.ranked_objs.keys():
+            self.ranked_objs[obj_rank]['demo_start_pcds'] = []
+            self.ranked_objs[obj_rank]['demo_final_pcds'] = []
+            self.ranked_objs[obj_rank]['demo_ids'] = []
+            self.ranked_objs[obj_rank]['demo_start_poses'] = []
+
+        for obj_rank in self.ranked_objs.keys():
+            if obj_rank == 0:
+                demo_key = 'child'
+            elif obj_rank == 1:
+                demo_key == 'parent'
+            else:
+                log_warn('This obj rank should not exist')
+                continue
+            for demo_path in self.skill_demos[:min(n, len(self.skill_demos))]:
+                demo = np.load(demo_path, allow_pickle=True)
+                s_pcd = demo['multi_obj_start_pcd'].item()[demo_key]
+                if 'multi_obj_final_pcd' in demo:
+                    f_pcd = demo['multi_obj_final_pcd'].item()[demo_key]
+                else:
+                    f_pcd = s_pcd
+                self.ranked_objs[obj_rank]['demo_start_pcds'].append(s_pcd)
+                self.ranked_objs[obj_rank]['demo_final_pcds'].append(f_pcd)
+                
+        demo_path = osp.join(path_util.get_rndf_data(), 'release_real_demos', concept)
+        relational_model_path, target_model_path = self.ranked_objs[1]['model_path'], self.ranked_objs[0]['model_path']
+        target_desc_subdir = create_target_desc_subdir(demo_path, relational_model_path, target_model_path, create=False)
+        target_desc_fname = osp.join(demo_path, target_desc_subdir, 'target_descriptors.npz')
+        if osp.exists(target_desc_fname):
+            log_debug(f'Loading target descriptors from file:\n{target_desc_fname}')
+            target_descriptors_data = np.load(target_desc_fname)
+        else:
+            log_warn('Descriptor file not found')
+            return
+
+        target_descriptors_data = np.load(target_desc_fname)
+        relational_overall_target_desc = target_descriptors_data['parent_overall_target_desc']
+        target_overall_target_desc = target_descriptors_data['child_overall_target_desc']
+        self.ranked_objs[1]['target_desc'] = torch.from_numpy(relational_overall_target_desc).float().cuda()
+        self.ranked_objs[0]['target_desc'] = torch.from_numpy(target_overall_target_desc).float().cuda()
+        self.ranked_objs[1]['query_pts'] = target_descriptors_data['parent_query_points']
+        #slow - change deepcopy to shallow copy? 
+        self.ranked_objs[0]['query_pts'] = copy.deepcopy(target_descriptors_data['parent_query_points'])
+        log_debug('Finished loading relational descriptors')
+
+    def prepare_new_descriptors(self):
+        log_info(f'\n\n\nCreating target descriptors for this parent model + child model, and these demos\nSaving to {target_desc_fname}\n\n\n')
+        # MAKE A NEW DIR FOR TARGET DESCRIPTORS
+        demo_path = osp.join(path_util.get_rndf_data(), 'targets', self.concept)
+
+        # TODO: get default model_path for the obj_class?
+        # parent_model_path, child_model_path = self.args.parent_model_path, self.args.child_model_path
+        relational_model_path = self.ranked_objs[1]['model_path']
+        target_model_path = self.ranked_objs[0]['model_path']
+
+        target_desc_subdir = create_target_desc_subdir(demo_path, relational_model_path, target_model_path, create=False)
+        target_desc_fname = osp.join(demo_path, target_desc_subdir, 'target_descriptors.npz') 
+        
+        assert not osp.exists(target_desc_fname) or self.args.new_descriptor, 'Descriptor exists and/or did not specify creation of new descriptors'
+        create_target_desc_subdir(demo_path, relational_model_path, target_model_path, create=True)
+        self.prepare_new_descriptors(target_desc_fname)
+       
+        n_demos = 'all' if self.args.n_demos < 1 else self.args.n_demos
+        
+        if self.ranked_objs[0]['potential_class'] == 'container' and self.ranked_objs[1]['potential_class'] == 'bottle':
+            use_keypoint_offset = True
+            keypoint_offset_params = {'offset': 0.025, 'type': 'bottom'}
+        else:
+            use_keypoint_offset = False 
+            keypoint_offset_params = None
+
+        self.set_initial_models()
+        self.load_models()
+        # bare minimum settings
+        create_target_descriptors(
+            self.ranked_objs[1]['model'], self.ranked_objs[0]['model'], self.ranked_objs, target_desc_fname, 
+            self.cfg, query_scale=self.args.query_scale, scale_pcds=False, 
+            target_rounds=self.args.target_rounds, pc_reference=self.args.pc_reference,
+            skip_alignment=self.args.skip_alignment, n_demos=n_demos, manual_target_idx=self.args.target_idx, 
+            add_noise=self.args.add_noise, interaction_pt_noise_std=self.args.noise_idx,
+            use_keypoint_offset=use_keypoint_offset, keypoint_offset_params=keypoint_offset_params, visualize=True, mc_vis=self.mc_vis)
+       
 
     #################################################################################################
     # Optimization 
@@ -572,7 +874,7 @@ class Pipeline():
             pre_ee_end_pose2 = util.transform_pose(pose_source=ee_end_pose, pose_transform=preplace_offset_tf)
             pre_ee_end_pose1 = util.transform_pose(pose_source=pre_ee_end_pose2, pose_transform=preplace_direction_tf)        
 
-            # get pose that's straight up
+                # get pose that's straight up
             current_ee_pose = poly_util.polypose2np(self.panda.get_ee_pose())
             offset_pose = util.transform_pose(
                 pose_source=util.list2pose_stamped(current_ee_pose),
@@ -609,6 +911,11 @@ class Pipeline():
                                                 start_position=start_pose, 
                                                 execute=False)
             start_pose = jnt_pose
+            # else:
+            #     resulting_traj = self.planning.plan_joint_target(joint_position_desired=jnt_pose, 
+            #                                     from_current=True, 
+            #                                     start_position=None, 
+            #                                     execute=execute)
             if resulting_traj is None:
                 break
             else:
@@ -680,4 +987,3 @@ class Pipeline():
                 self.state = 0
                 if 1 in self.ranked_objs:
                     del self.ranked_objs[1]
-

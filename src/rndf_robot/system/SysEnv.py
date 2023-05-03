@@ -4,6 +4,8 @@ import random
 
 from rndf_robot.robot.Robot import Robot
 from rndf_robot.robot.RealRobot import RealRobot
+from rndf_robot.robot.SimRobot import SimRobot
+
 from rndf_robot.descriptions.ObjectData import ObjectData, OBJECT_CLASSES
 
 from rndf_robot.utils import util, path_util
@@ -13,7 +15,7 @@ from IPython import embed
 from airobot import log_debug, log_warn, log_info
 
 class Environment:
-    def __init__(self, args, mc_vis, robot: Robot, scene_objs=None) -> None:
+    def __init__(self, args, mc_vis, scene_objs=None) -> None:
         '''
         ranked_objs (dict): Maps a rank (0 for child, 1 for parent) to its ID in obj_info
         obj_info (dict): Maps an object ID to a dictionary containing information about the obj
@@ -24,14 +26,18 @@ class Environment:
 
         self.mc_vis = mc_vis
         self.args = args
-        self.robot = robot
         self.scene_objs = scene_objs
+        self.robot = None
         
         self.cfg = self.get_env_cfgs()
         self.object_data = ObjectData(self.cfg)
         self.ranked_objs = {}
         self.obj_info = {}
         self.desc_to_id = {}
+
+    def set_robot(self, robot: Robot):
+        self.robot = robot
+        self.setup_random_scene()
 
     def next_iter(self):
         while True:
@@ -65,12 +71,12 @@ class Environment:
                 self.setup_random_scene()
                 continue
             elif i == 'i':
-                assert isinstance(self.robot, RealRobot), 'This is only for real robot'
-                self.robot.gravity_comp(on=True)
+                if isinstance(self.robot, RealRobot):
+                    self.robot.gravity_comp(on=True)
                 continue
             elif i == 'l':
-                assert isinstance(self.robot, RealRobot), 'This is only for real robot'
-                self.robot.gravity_comp(on=False)
+                if isinstance(self.robot, RealRobot):
+                    self.robot.gravity_comp(on=False)
                 continue
             elif i =='em':
                 embed()
@@ -152,7 +158,9 @@ class Environment:
         '''
         @config_dict: Key are ['objects': {'class': #}]
         '''
-        assert self.scene_objs is not None, "The scene generation dictionary is None"
+        if self.scene_objs is None or not isinstance(self.robot, SimRobot):
+            print('Can not generate scene without PB or scene config')
+            return
 
         for obj_class, colors in self.scene_objs['objects'].items():
             for color, n in colors.items():
@@ -165,6 +173,7 @@ class Environment:
                     sim_obj_data = self.robot.add_obj(obj_file, 
                                                       obj_scale, 
                                                       obj_up_ori, 
+                                                      existing_objs=self.obj_info,
                                                       color=color)
                     obj_id, obj_pose_world = sim_obj_data
                     obj = {
