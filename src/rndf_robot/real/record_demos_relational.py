@@ -21,11 +21,11 @@ from airobot import log_info, log_warn, log_debug, log_critical, set_log_level
 
 from rndf_robot.utils import util, path_util
 from rndf_robot.utils.visualize import PandaHand, Robotiq2F140Hand
-from rndf_robot.utils.record_demo_utils import DefaultQueryPoints, manually_segment_pcd, convert_wrist2tip
+from rndf_robot.utils.record_demo_utils import DefaultQueryPoints, convert_wrist2tip
 from rndf_robot.utils.relational_utils import ParentChildObjectManager
 
 from rndf_robot.robot.franka_ik import FrankaIK #, PbPlUtils
-from rndf_robot.robot.simple_multicam import MultiRealsenseLocal
+from rndf_robot.cameras.simple_multicam import MultiRealsenseLocal
 
 from rndf_robot.config.default_multi_realsense_cfg import get_default_multi_realsense_cfg
 from rndf_robot.utils.real.traj_util import PolymetisTrajectoryUtil
@@ -35,34 +35,11 @@ from rndf_robot.utils.real.polymetis_util import PolymetisHelper
 
 poly_util = PolymetisHelper()
 
-from rndf_robot.system.system_utils.SAM import get_mask_from_pt
+from rndf_robot.segmentation.SAM import SAMSeg
+from rndf_robot.segmentation.pcd_utils import manually_segment_pcd
+from rndf_robot.segmentation.Annotate import Annotate
 from IPython import embed
 
-click_x, click_y = None, None
-def select_pt(image, child=True):
-    global click_x, click_y
-    
-    if child:
-        print('Recorded child mask at')
-    else:
-        print('Recorded parent mask at')
-    def mouse_event(event):
-        global click_x, click_y
-
-        print('x: {} and y: {}'.format(event.xdata, event.ydata))
-        click_x, click_y = event.xdata, event.ydata
-        fig.canvas.mpl_disconnect(cid)
-
-    fig = plt.figure()
-    click_x, click_y = None, None
-    cid = fig.canvas.mpl_connect('button_press_event', mouse_event)
-
-    plt.imshow(image)
-    plt.show()
-    if click_x is None or click_y is None:
-        fig.canvas.mpl_disconnect(cid)
-        return None
-    return np.array([click_x,click_y])
 
 def segment(pcd, top_n=1, eps=0.005, min_points=50, min_z=None):
     pcd_o3d = open3d.geometry.PointCloud()
@@ -84,11 +61,6 @@ def segment(pcd, top_n=1, eps=0.005, min_points=50, min_z=None):
         cluster_sizes.append(sz)
     topNsz = np.argsort(cluster_sizes)[-top_n:]
 
-    clusters = [pcd_clusters[topNsz[i]] for i in range(top_n)]
-    topNclusters = np.concatenate(clusters, axis=0)
-
-    proc_pcd = copy.deepcopy(topNclusters)
-    return proc_pcd
 def main(args):
     #############################################################################
     # generic setup
@@ -123,7 +95,7 @@ def main(args):
     mc_vis['scene'].delete()
 
     # ik_helper = FrankaIK(gui=True, base_pos=[0, 0, 0], robotiq=(args.gripper_type=='2f140'), mc_vis=mc_vis)
-    ik_helper = FrankaIK(gui=True, base_pos=[0, 0, 0], occnet=False, robotiq=(args.gripper_type=='2f140'), mc_vis=mc_vis)
+    ik_helper = FrankaIK(gui=True, base_pos=[0, 0, 0], robotiq=(args.gripper_type=='2f140'), mc_vis=mc_vis)
     tmp_obstacle_dir = osp.join(path_util.get_rndf_obj_descriptions(), 'tmp_planning_obs')
     util.safe_makedirs(tmp_obstacle_dir)
     table_obs = trimesh.creation.box([0.77, 1.22, 0.001]) #.apply_transform(util.matrix_from_list([0.15 + 0.77/2.0, 0.0015, 0.0, 0.0, 0.0, 0.0, 1.0]))
@@ -202,7 +174,7 @@ def main(args):
     cam_list = [camera_names[int(idx)] for idx in args.cam_index]
     serials = [serials[int(idx)] for idx in args.cam_index]
 
-    calib_dir = osp.join(path_util.get_rndf_src(), 'robot/camera_calibration_files')
+    calib_dir = osp.join(path_util.get_rndf_src(), 'cameras/camera_calibration_files')
     calib_filenames = [osp.join(calib_dir, f'cam_{idx}_calib_base_to_cam.json') for idx in args.cam_index]
 
     cams = MultiRealsenseLocal(cam_list, calib_filenames)
@@ -314,8 +286,9 @@ def main(args):
 
     # constants for manually cropping the point cloud (simple way to segment the object)
     # cropx, cropy, cropz, crop_note = [0.375, 0.75], [-0.5, 0.5], [0.0075, 0.35], 'table'
-    cropx, cropy, cropz, crop_note = [0.2, 0.7], [-0.45, 0.5], [0.003, 0.4], 'table'
+    cropx, cropy, cropz, crop_note = [0.2, 0.7], [-0.45, 0.5], [0.003, 1], 'table'
     full_cropx, full_cropy, full_cropz, full_crop_note = [0.0, 0.8], [-0.65, 0.65], [-0.01, 1.0], 'full scene'
+    bound = (cropx,cropy,cropz)
 
     print('\n\nBeginning demo iteration %d\n\n' % demo_iteration)
     got_observation = False
@@ -405,6 +378,7 @@ def main(args):
             cam_poses_list = []
             rgb_imgs = []
             depth_imgs = []
+            sam_seg = SAMSeg()
             for idx, cam in enumerate(cams.cams):
                 rgb, depth = realsense_interface.get_rgb_and_depth_image(pipelines[idx])
                 rgb_imgs.append(rgb)                
@@ -439,14 +413,11 @@ def main(args):
                 util.meshcat_pcd_show(mc_vis, pcd_world, name=f'scene/pcd_world_cam_{idx}')
 
             full_pcd = np.concatenate(pcd_pts, axis=0)
-            full_scene_pcd = manually_segment_pcd(full_pcd, x=full_cropx, y=full_cropy, z=full_cropz, note=full_crop_note)
+            # full_scene_pcd = manually_segment_pcd(full_pcd, x=full_cropx, y=full_cropy, z=full_cropz, note=full_crop_note)
             
             # crop the point cloud to the table
-            proc_pcd = manually_segment_pcd(full_pcd, x=cropx, y=cropy, z=cropz, note=crop_note)
-            top2clusters = segment(proc_pcd, top_n=2, eps=0.008, min_points=20)
-            util.meshcat_pcd_show(mc_vis, top2clusters, name='scene/top2clusters')
-
-            proc_pcd = copy.deepcopy(top2clusters)
+            proc_pcd = manually_segment_pcd(full_pcd, bounds=bound)
+            util.meshcat_pcd_show(mc_vis, proc_pcd, name='scene/cropped_scene')
 
             if args.instance_seg_method == 'hand-label':
                 log_warn('NOT IMPLEMENTED!')
@@ -457,28 +428,31 @@ def main(args):
                 for idx, _ in enumerate(cams.cams):
                     rgb = rgb_imgs[idx]
                     pcd_world_img = pcd_dict_list[idx]['world_img']
+                    from rndf_robot.segmentation.Annotate import Annotate
+                    a_child = Annotate()
 
-                    child_pt = select_pt(rgb, child=True)
-                    if child_pt is not None:
-                        child_mask = get_mask_from_pt(child_pt, image=rgb)
+                    child_bb = a_child.select_bb(rgb, f'Select child in scene')
+                    if child_bb is not None:
+                        child_mask = sam_seg.mask_from_bb(child_bb, image=rgb)
                         child_partial_pcd = pcd_world_img[child_mask].reshape((-1,3))
                         child_pts.append(child_partial_pcd)
 
-                    parent_pt = select_pt(rgb, child=False)
-                    if parent_pt is not None:
-                        parent_mask = get_mask_from_pt(parent_pt, image=rgb)
+                    a_parent = Annotate()
+                    parent_bb = a_parent.select_bb(rgb, f'Select parent in scene')
+                    if parent_bb is not None:
+                        parent_mask = sam_seg.mask_from_bb(parent_bb, image=rgb)
                         parent_partial_pcd = pcd_world_img[parent_mask].reshape((-1,3))
                         parent_pts.append(parent_partial_pcd)
 
                 if len(child_pts) > 0:
                     child_pcd = np.concatenate(child_pts, axis=0)
-                    child_pcd =  manually_segment_pcd(child_pcd, x=cropx, y=cropy, z=cropz, note=crop_note)
+                    # child_pcd =  manually_segment_pcd(child_pcd, bounds=bound, mean_inliers=False)
                     # child_pcd = segment(child_pcd, top_n=1, eps=0.008, min_points=20)
                     parent_child_manager.set_child_pointcloud(child_pcd)
 
                 if len(parent_pts) > 0:
                     parent_pcd = np.concatenate(parent_pts, axis=0)
-                    parent_pcd = manually_segment_pcd(parent_pcd, x=cropx, y=cropy, z=cropz, note=crop_note)
+                    # parent_pcd = manually_segment_pcd(parent_pcd, bounds=bound, mean_inliers=False)
                     parent_child_manager.set_parent_pointcloud(parent_pcd)
 
             else:  # y-axis
@@ -849,7 +823,7 @@ def main(args):
             if args.gripper_type != '2f140':
                 print('Only valid for 2F140 gripper')
                 continue
-            default_2f140_open_width = int(np.clip(int(new_gripper_open_value), 0, gripper.get_state().max_width))
+            default_2f140_open_width = np.clip(float(new_gripper_open_value), 0, gripper.get_state().max_width)
             planning.set_gripper_open_pos(default_2f140_open_width)
             planning.gripper.goto(planning.gripper_close_pos, gripper_speed, gripper_force, blocking=False)
             print(f'New default_2f140_open_width: {default_2f140_open_width}')
@@ -881,6 +855,8 @@ def main(args):
             parent_child_manager.clear()
             print('Clearing all info')
             mc_vis['scene'].delete()
+
+            torch.cuda.empty_cache()
             continue
         elif user_val == 'b':
             print('Exiting')

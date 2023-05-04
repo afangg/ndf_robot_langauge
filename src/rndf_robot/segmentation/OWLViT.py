@@ -67,20 +67,20 @@ class OWLViTDetect:
 
         return out_boxes, out_scores
     
-    def detect(self, image, classes, max_count=None, score_threshold=0.1, show_boxes=False):
-        captions_to_bboxes, bbox_scores = self.detect_captions(image, classes, top=max_count, score_threshold=score_threshold, show_detection=True)
+    # def detect(self, image, classes, max_count=None, score_threshold=0.1, show_boxes=False):
+    #     captions_to_bboxes, bbox_scores = self.detect_captions(image, classes, top=max_count, score_threshold=score_threshold, show_detection=True)
 
-        if show_boxes:
-            for label, bboxes in captions_to_bboxes.items():
-                for i in range(len(bboxes)):
-                    box, score = bboxes[i], bbox_scores[label][i]
-                    xmin,ymin,xmax,ymax = box
-                    score = score[0]
-                    draw_bounding_box_on_image(image, ymin, xmin, ymax, xmax, display_str_list=[f"{label}: {score}"], use_normalized_coordinates=False)
-            plt.imshow(image)
-            plt.show()
+    #     if show_boxes:
+    #         for label, bboxes in captions_to_bboxes.items():
+    #             for i in range(len(bboxes)):
+    #                 box, score = bboxes[i], bbox_scores[label][i]
+    #                 xmin,ymin,xmax,ymax = box
+    #                 score = score[0]
+    #                 draw_bounding_box_on_image(image, ymin, xmin, ymax, xmax, display_str_list=[f"{label}: {score}"], use_normalized_coordinates=False)
+    #         plt.imshow(image)
+    #         plt.show()
     
-        return captions_to_bboxes, bbox_scores
+    #     return captions_to_bboxes, bbox_scores
     
 
 def draw_bounding_box_on_image(image,

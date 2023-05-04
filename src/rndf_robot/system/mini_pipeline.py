@@ -110,6 +110,7 @@ class Pipeline:
         self.system_env.next_iter()
         while True:
             run(self.system_env, self.FUNCTIONS)
+            self.system_env.next_iter()
 
 def run(system_env: Environment, FUNCTIONS):
     prompt_output = FUNCTIONS['ask']()
@@ -131,7 +132,8 @@ def run(system_env: Environment, FUNCTIONS):
 
     pcd_class_pairs = zip(pcds, obj_classes)
     skill_func(*pcd_class_pairs, geometry)
-    system_env.next_iter()
+    torch.cuda.empty_cache()
+
     
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

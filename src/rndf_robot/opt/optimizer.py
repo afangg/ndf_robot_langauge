@@ -178,7 +178,7 @@ class OccNetOptimizer:
             return descriptor
 
     def optimize_transform_implicit(self, shape_pts_world_np, ee=True, return_score_list=False, return_final_desc=False, 
-                                    target_act_hat=None, visualize=False, *args, **kwargs):
+                                    target_act_hat=None, visualize=True, *args, **kwargs):
         """
         Function to optimzie the transformation of our query points, conditioned on
         a set of shape points observed in the world
@@ -277,7 +277,7 @@ class OccNetOptimizer:
         # set up model input with shape points and the shape latent that will be used throughout
         mi['coords'] = X
         latent = self.model.extract_latent(mi).detach()
-
+        
         if self.mc_vis is not None and visualize:
             util.meshcat_pcd_show(self.mc_vis, shape_pts_cent.cpu().numpy(), color=[0, 0, 255], name=f'optimizer/shape_points_centered')
         # run optimization

@@ -44,7 +44,8 @@ class Environment:
             i = input(
                 '''What should we do
                     [h]: Move to home
-                    [o]: Open gripper
+                    [o]: Open/Close gripper
+                    [c]: Open gripper
                     [n]: Continue to next iteration
                     [g]: *SIM ONLY* - generate a new random scene from configs
                     [i]: *REAL ONLY* - to set into low stiffness mode
@@ -58,6 +59,8 @@ class Environment:
                 continue
             elif i == 'o':
                 self.robot.gripper_state(open=True)
+            elif i == 'c':
+                self.robot.gripper_state(open=False)
             elif i == 'n':
                 self.mc_vis['scene'].delete()
                 self.mc_vis['optimizer'].delete()

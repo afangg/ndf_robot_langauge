@@ -15,7 +15,7 @@ from pybullet_tools.utils import add_data_path, connect, dump_body, disconnect, 
     get_movable_joints, get_sample_fn, set_joint_positions, get_joint_positions, get_joint_name, get_joint_info, LockRenderer, link_from_name, get_link_pose, \
     multiply, Pose, Point, interpolate_poses, HideOutput, draw_pose, set_camera_pose, load_pybullet, \
     assign_link_colors, add_line, point_from_pose, remove_handles, BLUE, pairwise_collision, set_client, get_client, pairwise_link_collision, \
-    plan_joint_motion, create_attachment, enable_real_time, disable_real_time, body_from_end_effector, set_pose, set_renderer
+    plan_joint_motion, create_attachment, enable_real_time, disable_real_time, body_from_end_effector, set_pose, set_renderer, any_link_pair_collision
 
 from pybullet_tools.ikfast.franka_panda.ik import PANDA_INFO, FRANKA_URDF_2F140, FRANKA_URDF # , FRANKA_URDF_NOGRIPPER
 # FRANKA_URDF = FRANKA_URDF_WIDE
@@ -211,7 +211,7 @@ class FrankaIK:
         return False
 
     def check_collision(self):
-        # self_collision = any_link_pair_collision(self.robot, None, self.robot, None)
+        self_collision = any_link_pair_collision(self.robot, None, self.robot, None)
         within_joint_limits = self.within_joint_limits(get_joint_positions(self.robot, self.ik_joints))
         if not within_joint_limits:
             return True, 'limits'

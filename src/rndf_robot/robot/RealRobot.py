@@ -144,7 +144,7 @@ class RealRobot(Robot):
 
     def execute(self, ee_poses):
         for i, ee_pose in enumerate(ee_poses):
-            pose = util.body_world_yaw(util.list2pose_stamped(ee_pose), theta=-1.5708)
+            pose = util.body_world_yaw(util.list2pose_stamped(ee_pose), theta=0)
             pose = util.matrix_from_pose(pose)
             util.meshcat_obj_show(self.mc_vis, self.ee_file, pose, 1.0, name=f'ee/ee_{i}')
 
@@ -173,7 +173,8 @@ class RealRobot(Robot):
             if resulting_traj is None:
                 break
             else:
-                joint_traj += resulting_traj
+                # joint_traj += resulting_traj
+                joint_traj.append(resulting_traj)
         else:
             self.execution_prompt(joint_traj)
 
@@ -212,14 +213,19 @@ class RealRobot(Robot):
                 ''')
             
             if i == 's':
-                self.planning.execute_pb_loop(joint_traj)
+                for traj in joint_traj:
+                    self.planning.execute_pb_loop(traj)
                 continue
             elif i == 'e':
                 confirm = input('Should we execute (y/n)???')
                 if confirm == 'y':
                     self.execute_pre_step()
-                    self.planning.execute_loop(joint_traj)
-                    self.execute_post_step()
+                    for i, traj in enumerate(joint_traj):
+                        if i == len(joint_traj)-1 and self.state == 0:
+                            self.execute_post_step()
+                            time.sleep(0.2)
+
+                        self.planning.execute_loop(traj)
 
                 continue
             elif i == 'b':

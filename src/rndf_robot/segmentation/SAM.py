@@ -1,6 +1,7 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
+import matplotlib
+matplotlib.use('TkAgg')
 
 from segment_anything import sam_model_registry, SamPredictor
 from huggingface_hub import hf_hub_download

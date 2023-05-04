@@ -20,10 +20,10 @@ from airobot import log_info, log_warn, log_debug, log_critical, set_log_level
 
 from rndf_robot.utils import util, path_util
 from rndf_robot.utils.visualize import PandaHand, Robotiq2F140Hand
-from rndf_robot.utils.record_demo_utils import DefaultQueryPoints, manually_segment_pcd
+from rndf_robot.utils.record_demo_utils import DefaultQueryPoints
 
 from rndf_robot.robot.franka_ik import FrankaIK #, PbPlUtils
-from rndf_robot.robot.simple_multicam import MultiRealsenseLocal
+from rndf_robot.cameras.simple_multicam import MultiRealsenseLocal
 
 from rndf_robot.config.default_multi_realsense_cfg import get_default_multi_realsense_cfg
 from rndf_robot.utils.real.traj_util import PolymetisTrajectoryUtil
@@ -31,7 +31,8 @@ from rndf_robot.utils.real.plan_exec_util import PlanningHelper
 from rndf_robot.utils.real.perception_util import RealsenseInterface, enable_devices
 from rndf_robot.utils.real.polymetis_util import PolymetisHelper
 
-from rndf_robot.system.system_utils.SAM import get_mask_from_pt, Annotate
+from rndf_robot.segmentation.pcd_utils import manually_segment_pcd
+from rndf_robot.segmentation.Annotate import Annotate
 
 poly_util = PolymetisHelper()
 
@@ -57,8 +58,7 @@ def main(args):
     mc_vis = meshcat.Visualizer(zmq_url=f'tcp://127.0.0.1:{args.port_vis}')
     mc_vis['scene'].delete()
 
-    # ik_helper = FrankaIK(gui=True, base_pos=[0, 0, 0], robotiq=(args.gripper_type=='2f140'), mc_vis=mc_vis)
-    ik_helper = FrankaIK(gui=True, base_pos=[0, 0, 0], occnet=False, robotiq=(args.gripper_type=='2f140'), mc_vis=mc_vis)
+    ik_helper = FrankaIK(gui=True, base_pos=[0, 0, 0], robotiq=(args.gripper_type=='2f140'), mc_vis=mc_vis)
     tmp_obstacle_dir = osp.join(path_util.get_rndf_obj_descriptions(), 'tmp_planning_obs')
     util.safe_makedirs(tmp_obstacle_dir)
     table_obs = trimesh.creation.box([0.77, 1.22, 0.001]) #.apply_transform(util.matrix_from_list([0.15 + 0.77/2.0, 0.0015, 0.0, 0.0, 0.0, 0.0, 1.0]))
@@ -133,7 +133,7 @@ def main(args):
     cam_list = [camera_names[int(idx)] for idx in args.cam_index]
     serials = [serials[int(idx)] for idx in args.cam_index]
 
-    calib_dir = osp.join(path_util.get_rndf_src(), 'robot/camera_calibration_files')
+    calib_dir = osp.join(path_util.get_rndf_src(), 'cameras/camera_calibration_files')
     calib_filenames = [osp.join(calib_dir, f'cam_{idx}_calib_base_to_cam.json') for idx in args.cam_index]
 
     cams = MultiRealsenseLocal(cam_list, calib_filenames)
@@ -255,6 +255,7 @@ def main(args):
     # cropx, cropy, cropz, crop_note = [0.3, 0.6], [0.3, 0.6], [0.01, 0.35], 'table'
 
     cropx, cropy, cropz, crop_note = [0.1, 0.75], [-0.5, 0.0], [0.01, 0.35], 'table_right'
+    bound = (cropx, cropy, cropz)
     # cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.0], [0.09, 0.35], 'block2'
     # cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.5, 0.0], [0.09, 0.35], 'block'
     full_cropx, full_cropy, full_cropz, full_crop_note = [0.0, 0.8], [-0.65, 0.65], [-0.01, 1.0], 'full scene'
@@ -325,6 +326,11 @@ def main(args):
             cam_poses_list = []
             rgb_imgs = []
             depth_imgs = []
+        
+            if args.instance_seg_method == 'nn':
+                from rndf_robot.segmentation.SAM import SAMSeg
+
+                sam_seg = SAMSeg()
             for idx, cam in enumerate(cams.cams):
                 # rgb, depth = img_subscribers[idx][1].get_rgb_and_depth(block=True)
                 rgb, depth = realsense_interface.get_rgb_and_depth_image(pipelines[idx])
@@ -365,7 +371,7 @@ def main(args):
                 util.meshcat_pcd_show(mc_vis, pcd_world, name=f'scene/pcd_world_cam_{idx}')
 
             full_pcd = np.concatenate(pcd_pts, axis=0)
-            full_scene_pcd = manually_segment_pcd(full_pcd, x=full_cropx, y=full_cropy, z=full_cropz, note=full_crop_note)
+            full_scene_pcd = manually_segment_pcd(full_pcd, bounds=bound)
             
             if args.instance_seg_method == 'nn':
                 obj_pcd = []
@@ -375,19 +381,19 @@ def main(args):
                     pcd_world_img = pcd_dict_list[idx]['world_img']
                     a = Annotate()
 
-                    selected_pt = a.select_pt(rgb, f'Select object in scene')
-                    if selected_pt is not None:
-                        mask = get_mask_from_pt(selected_pt, image=rgb, show=False)
+                    selected_bb = a.select_bb(rgb, f'Select object in scene')
+                    if selected_bb is not None:
+                        mask = sam_seg.mask_from_bb(selected_bb, image=rgb)
                         partial_pcd = pcd_world_img[mask].reshape((-1,3))
                         obj_pcd.append(partial_pcd)
                 obj_pcd = np.concatenate(obj_pcd, axis=0)
                 proc_pcd = copy.deepcopy(obj_pcd)
                 # crop the point cloud to the table
-                proc_pcd = manually_segment_pcd(proc_pcd, x=cropx, y=cropy, z=cropz, note=crop_note)
+                proc_pcd = manually_segment_pcd(proc_pcd, bounds=bound, mean_inliers=False)
 
             else:
                 # crop the point cloud to the table
-                proc_pcd = manually_segment_pcd(full_pcd, x=cropx, y=cropy, z=cropz, note=crop_note)
+                proc_pcd = manually_segment_pcd(full_pcd, bounds=bound, mean_inliers=False)
 
                 pcd_o3d = open3d.geometry.PointCloud()
                 pcd_o3d.points = open3d.utility.Vector3dVector(proc_pcd)
@@ -620,7 +626,7 @@ def main(args):
                 print('Only valid for 2F140 gripper')
                 continue
             # default_2f140_open_width = int(np.clip(int(new_gripper_open_value), 0, 255))
-            default_2f140_open_width = int(np.clip(int(new_gripper_open_value), 0, gripper.get_state().max_width))
+            default_2f140_open_width = np.clip(float(new_gripper_open_value), 0, gripper.get_state().max_width)
             planning.set_gripper_open_pos(default_2f140_open_width)
             planning.gripper.goto(planning.gripper_close_pos, gripper_speed, gripper_force, blocking=False)
             print(f'New default_2f140_open_width: {default_2f140_open_width}')

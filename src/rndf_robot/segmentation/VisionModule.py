@@ -36,7 +36,7 @@ class VisionModule:
         assert self.seg_method == 'pb_seg', 'Seg method does not use PyBullet'
         return self.camera_sys.get_pb_seg(obj_id_to_class)
 
-    def language_seg(self, captions, centroid_thresh=0.1, detect_thresh=0.15):
+    def language_seg(self, captions, centroid_thresh=0.1, detect_thresh=0.4):
         pcd_2ds, rgb_imgs, valid_depths = self.camera_sys.get_all_real_views(crop_show=True)
  
         label_to_pcds = {}
@@ -52,7 +52,6 @@ class VisionModule:
                     mask = None
                     if self.seg_method == 'bbox':
                         selected = a.select_bb(rgb, f'Select {caption} in scene')
-                        from IPython import embed
                         if None not in selected:
                             mask = self.seg.mask_from_bb(selected, image=rgb, show=False)
                     elif self.seg_method == 'point':
@@ -71,13 +70,21 @@ class VisionModule:
                 detector_bboxes, detector_scores = self.obj_detector.detect_captions(
                                                         rgb, 
                                                         captions, 
-                                                        max_count=1, 
+                                                        top=1, 
                                                         score_threshold=detect_thresh)
                 log_debug(f'Detected the following captions {detector_scores.keys()}')
-
                 if not detector_bboxes:
                     continue
-                all_obj_masks = self.seg.mask_from_bb(detector_bboxes, rgb)
+                for caption, bboxes in detector_bboxes.items():
+                    if caption not in all_obj_masks:
+                        all_obj_masks[caption] = []
+                        all_obj_bb_scores[caption] = []
+                    for i, bbox in enumerate(bboxes):
+                        mask = self.seg.mask_from_bb(bbox, rgb)
+                        if mask is not None:
+                            all_obj_masks[caption].append(mask)
+                            all_obj_bb_scores[caption].append(detector_scores[caption][i])
+
             else:
                 raise NotImplementedError('This segmentation method does not exist')
 

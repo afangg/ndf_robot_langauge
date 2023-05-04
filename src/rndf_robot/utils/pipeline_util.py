@@ -299,7 +299,7 @@ def get_ee_offset(ee_pose):
     dist = 0.1
     normal_x = util.list2pose_stamped([dist, 0, 0, 0, 0, 0, 1])
     normal_y = util.list2pose_stamped([0, dist, 0, 0, 0, 0, 1])
-    normal_z = util.list2pose_stamped([0, 0, dist, 0, 0, 0, 1])
+    normal_z = util.list2pose_stamped([0, 0, dist+0.01, 0, 0, 0, 1])
 
     normal_x = util.transform_pose(normal_x, util.list2pose_stamped(ee_pose))
     normal_y = util.transform_pose(normal_y, util.list2pose_stamped(ee_pose))

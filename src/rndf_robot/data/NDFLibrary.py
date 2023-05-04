@@ -332,7 +332,7 @@ class NDFLibrary:
         optimizer = self.get_optimizer(obj_class, demo_dic['query_pts'])
         optimizer.set_demo_info(demo_dic['demo_info'])
         
-        pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=True)
+        pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=True, opt_visualize=True)
         corresponding_pose = util.pose_from_matrix(pose_mats[best_idx])
 
         # grasping requires post processing to find anti-podal point
@@ -346,8 +346,11 @@ class NDFLibrary:
 
         offset_tf1 = util.list2pose_stamped(get_ee_offset(ee_pose=corresponding_pose_list))
         pre_ee_end_pose1 = util.transform_pose(pose_source=util.list2pose_stamped(corresponding_pose_list), pose_transform=offset_tf1)
-
-        ee_poses = [pre_ee_end_pose1, corresponding_pose]
+        offset_pose = util.transform_pose(
+            pose_source=corresponding_pose,
+            pose_transform=util.list2pose_stamped([0, 0, 0.15, 0, 0, 0, 1])
+        )
+        ee_poses = [pre_ee_end_pose1, corresponding_pose, offset_pose]
         return [util.pose_stamped2list(pose) for pose in ee_poses]
     
     def place(self, target_pcd, obj_class, geometry, ee_pose):        
@@ -375,7 +378,7 @@ class NDFLibrary:
         optimizer = self.get_optimizer(obj_class, demo_dic['query_pts'])
         optimizer.set_demo_info(demo_dic['demo_info'])
         
-        pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=False)
+        pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=False, opt_visualize=True)
 
         corresponding_pose = util.pose_from_matrix(pose_mats[best_idx])
         corresponding_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=corresponding_pose)
@@ -423,7 +426,8 @@ class NDFLibrary:
 
         corresponding_pose = util.pose_from_matrix(corresponding_mat)
         corresponding_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=corresponding_pose)
-        ee_poses = [*self.get_place_pre_poses(corresponding_pose), corresponding_pose]
+        # ee_poses = [*self.get_place_pre_poses(corresponding_pose), corresponding_pose]
+        ee_poses = [corresponding_pose]
         return [util.pose_stamped2list(pose) for pose in ee_poses]
 
     def get_place_pre_poses(self, corresponding_pose):

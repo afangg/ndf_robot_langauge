@@ -21,7 +21,7 @@ class PromptModule:
             if not query: return
             best_skill, query_text = query
             break
-        return best_skill, query_text
+        return best_skill, query_text.lower()
 
     def ask_query(self):
         '''
