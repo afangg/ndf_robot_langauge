@@ -686,6 +686,26 @@ def main(args):
                 parent=parent_class,
                 child=child_class)
 
+            # np.savez(
+            #     save_file_path,
+            #     pcd_pts=pcd_pts,
+            #     processed_pcd=proc_pcd,
+            #     rgb_imgs=rgb_imgs,
+            #     depth_imgs=depth_imgs,
+            #     cam_intrinsics=cam_int_list,
+            #     cam_poses=cam_poses_list,
+            #     multi_obj_names=multi_obj_names_dict,
+            #     multi_obj_start_pcd=multi_obj_start_pcd_dict,
+            #     multi_obj_final_pcd=multi_obj_final_pcd_dict,
+            #     grasp_pose_world=multi_obj_grasp_pose_dict,
+            #     place_pose_world=multi_obj_place_pose_dict,
+            #     grasp_joints=multi_obj_grasp_joints_dict,
+            #     place_joints=multi_obj_place_joints_dict,
+            #     ee_link=None,
+            #     gripper_type=args.gripper_type,
+            #     offset_pose_relative=offset_pose_relative,
+            #     interaction_point=interaction_point
+            # )
             np.savez(
                 save_file_path,
                 pcd_pts=pcd_pts,

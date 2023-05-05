@@ -11,7 +11,8 @@ class SAMSeg:
         chkpt_path = hf_hub_download("ybelkada/segment-anything", "checkpoints/sam_vit_h_4b8939.pth")
         model_type = "vit_h"
         sam = sam_model_registry[model_type](checkpoint=chkpt_path)
-        sam.to(device='cuda')
+        sam.eval()
+        # sam.to(device='cuda')
         self.predictor = SamPredictor(sam)
 
     def masks_from_bbs(self, image, all_obj_bbs):

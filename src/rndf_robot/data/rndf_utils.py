@@ -12,9 +12,39 @@ from rndf_robot.utils import util
 from rndf_robot.opt.optimizer import OccNetOptimizer
 
 
-def infer_relation_intersection(mc_vis, parent_optimizer, child_optimizer, parent_target_desc, child_target_desc, 
-                                parent_pcd, child_pcd, parent_query_points, child_query_points, opt_visualize=False, visualize=False,
-                                *args, **kwargs):
+# def infer_relation_intersection(mc_vis, parent_optimizer, child_optimizer, parent_target_desc, child_target_desc, 
+#                                 parent_pcd, child_pcd, parent_query_points, child_query_points, opt_visualize=False, visualize=False,
+#                                 *args, **kwargs):
+#     out_parent_feat = parent_optimizer.optimize_transform_implicit(parent_pcd, ee=True, return_score_list=True, return_final_desc=True, target_act_hat=parent_target_desc, visualize=opt_visualize)
+#     parent_feat_pose_mats, best_parent_idx, desc_dist_parent, desc_parent = out_parent_feat
+
+#     parent_feat_pose_mat = parent_feat_pose_mats[best_parent_idx]
+#     child_query_points = util.transform_pcd(parent_query_points, parent_feat_pose_mats[best_parent_idx])
+#     child_optimizer.set_query_points(child_query_points)
+
+#     # now we want to do the same thing relative to the child objects
+#     out_child_feat = child_optimizer.optimize_transform_implicit(child_pcd, ee=False, return_score_list=True, return_final_desc=True, target_act_hat=child_target_desc, visualize=opt_visualize)
+#     child_feat_pose_mats, best_child_idx, desc_dist_child, desc_child = out_child_feat
+
+#     child2parent_feat_pose_mat = child_feat_pose_mats[best_child_idx]
+#     parent2child_feat_pose_mat = np.linalg.inv(child2parent_feat_pose_mat)
+#     child_feat_pose_mat = np.matmul(parent2child_feat_pose_mat, parent_feat_pose_mat)
+#     transformed_child_feat_pose_mat = np.matmul(child2parent_feat_pose_mat, child_feat_pose_mat)
+
+#     if visualize:
+#         util.meshcat_frame_show(mc_vis, 'scene/parent_feat_pose', parent_feat_pose_mat)
+#         util.meshcat_frame_show(mc_vis, 'scene/child_feat_pose', child_feat_pose_mat)
+#         util.meshcat_frame_show(mc_vis, 'scene/transformed_child_feat_pose', transformed_child_feat_pose_mat)
+    
+#     # finally, the relative pose we should execute is here
+#     relative_transformation = child_feat_pose_mats[best_child_idx]
+#     return relative_transformation
+
+def infer_relation_intersection(mc_vis, parent_optimizer, child_optimizer, parent_ndf, child_ndf, 
+                                current_ee_pose=None, opt_visualize=False, visualize=False,):
+    parent_target_desc, parent_pcd, parent_query_points = parent_ndf
+    child_target_desc, child_pcd, child_query_points = child_ndf
+
     out_parent_feat = parent_optimizer.optimize_transform_implicit(parent_pcd, ee=True, return_score_list=True, return_final_desc=True, target_act_hat=parent_target_desc, visualize=opt_visualize)
     parent_feat_pose_mats, best_parent_idx, desc_dist_parent, desc_parent = out_parent_feat
 
@@ -37,6 +67,14 @@ def infer_relation_intersection(mc_vis, parent_optimizer, child_optimizer, paren
         util.meshcat_frame_show(mc_vis, 'scene/transformed_child_feat_pose', transformed_child_feat_pose_mat)
     
     # finally, the relative pose we should execute is here
+    for pose_idx in torch.argsort(torch.stack(desc_dist_child)):
+        potential_mat = child_feat_pose_mats[pose_idx]
+        corresponding_pose = util.pose_from_matrix(potential_mat)
+        corresponding_pose = util.transform_pose(pose_source=util.list2pose_stamped(current_ee_pose), pose_transform=corresponding_pose)
+        log_debug(f'EE Pose {pose_idx}: {corresponding_pose.pose}')
+        if corresponding_pose.pose.position.z > 0:
+            return potential_mat
+
     relative_transformation = child_feat_pose_mats[best_child_idx]
     return relative_transformation
 

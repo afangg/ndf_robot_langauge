@@ -6,7 +6,6 @@ import trimesh
 from polymetis import GripperInterface, RobotInterface
 
 from rndf_robot.robot.franka_ik import FrankaIK
-from rndf_robot.data.NDFLibrary import NDFLibrary
 from rndf_robot.utils import util, path_util
 from rndf_robot.utils.real.traj_util import PolymetisTrajectoryUtil
 from rndf_robot.utils.real.plan_exec_util import PlanningHelper
@@ -157,17 +156,19 @@ class RealRobot(Robot):
             return
         
         for jnt_pose in jnt_poses:
-            input('Press enter to show next plan')
+            # input('Press enter to show next plan')
             # if not execute:
             if start_pose is None:
                 resulting_traj = self.planning.plan_joint_target(joint_position_desired=jnt_pose, 
                             from_current=True, 
                             start_position=None, 
+                            show_pb=False,
                             execute=False)
             else:
                 resulting_traj = self.planning.plan_joint_target(joint_position_desired=jnt_pose, 
                                                 from_current=False, 
                                                 start_position=start_pose, 
+                                                show_pb=False,
                                                 execute=False)
             start_pose = jnt_pose
             if resulting_traj is None:
@@ -186,16 +187,6 @@ class RealRobot(Robot):
 
         final_pcd = util.transform_pcd(obj_pcd, transform)
         util.meshcat_pcd_show(self.mc_vis, final_pcd, color=(255, 0, 255), name=f'scene/teleported_obj')
-
-    def cascade_ik(self, ee_pose):
-        jnt_pos = None
-        if jnt_pos is None:
-            jnt_pos = self.ik_helper.get_feasible_ik(ee_pose, verbose=False)
-            if jnt_pos is None:
-                jnt_pos = self.ik_helper.get_ik(ee_pose)
-        if jnt_pos is None:
-            log_warn('Failed to find IK')
-        return jnt_pos
 
     def move_robot(self, plan):
         for jnt in plan:
@@ -226,8 +217,9 @@ class RealRobot(Robot):
                             time.sleep(0.2)
 
                         self.planning.execute_loop(traj)
-
-                continue
+                    if self.state != 0:
+                        self.execute_post_step()
+                    break
             elif i == 'b':
                 break
             else:

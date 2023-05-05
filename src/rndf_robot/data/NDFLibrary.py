@@ -16,6 +16,7 @@ from rndf_robot.opt.optimizer import OccNetOptimizer
 import rndf_robot.model.vnn_occupancy_net_pointnet_dgcnn as vnn_occupancy_network
 from rndf_robot.data.rndf_utils import infer_relation_intersection, create_target_descriptors
 from rndf_robot.data.demo_data_processing import *
+from rndf_robot.system.garbage import free_memory
 
 from airobot import log_debug, log_warn, log_info
 from IPython import embed
@@ -332,8 +333,23 @@ class NDFLibrary:
         optimizer = self.get_optimizer(obj_class, demo_dic['query_pts'])
         optimizer.set_demo_info(demo_dic['demo_info'])
         
-        pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=True, opt_visualize=True)
-        corresponding_pose = util.pose_from_matrix(pose_mats[best_idx])
+        pose_mats, best_idx, losses = optimizer.optimize_transform_implicit(target_pcd, ee=True, opt_visualize=True, return_score_list=True)
+        
+        
+        
+        for pose_idx in torch.argsort(torch.stack(losses)):
+            potential_mat = pose_mats[pose_idx]
+            corresponding_pose = util.pose_from_matrix(potential_mat)
+            log_debug(f'EE Pose {pose_idx}: {corresponding_pose.pose}')
+            if corresponding_pose.pose.position.z > 0:
+                corresponding_pose = util.pose_from_matrix(pose_mats[pose_idx])
+                break
+        else:
+            log_debug('Failed to find a reasonable grasp')
+            return
+        
+        
+        # corresponding_pose = util.pose_from_matrix(pose_mats[best_idx])
 
         # grasping requires post processing to find anti-podal point
         corresponding_pose_list = util.pose_stamped2list(corresponding_pose)
@@ -351,6 +367,7 @@ class NDFLibrary:
             pose_transform=util.list2pose_stamped([0, 0, 0.15, 0, 0, 0, 1])
         )
         ee_poses = [pre_ee_end_pose1, corresponding_pose, offset_pose]
+        free_memory([optimizer], debug=False)
         return [util.pose_stamped2list(pose) for pose in ee_poses]
     
     def place(self, target_pcd, obj_class, geometry, ee_pose):        
@@ -378,8 +395,8 @@ class NDFLibrary:
         optimizer = self.get_optimizer(obj_class, demo_dic['query_pts'])
         optimizer.set_demo_info(demo_dic['demo_info'])
         
-        pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=False, opt_visualize=True)
-
+        pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=False, opt_visualize=True,)
+        # pose_mats, best_idx, losses = optimizer.optimize_transform_implicit(target_pcd, ee=False, opt_visualize=True, return_score_list=True)
         corresponding_pose = util.pose_from_matrix(pose_mats[best_idx])
         corresponding_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=corresponding_pose)
         ee_poses = [*self.get_place_pre_poses(corresponding_pose), corresponding_pose]
@@ -417,25 +434,35 @@ class NDFLibrary:
 
         target_desc, relational_desc = demo_dic[0]['target_desc'], demo_dic[1]['target_desc']
         target_query_pts, relational_query_pts = demo_dic[0]['query_pts'], demo_dic[1]['query_pts']
+        
+        target_ndf = (target_desc, target_pcd, target_query_pts)
+        relational_ndf = (relational_desc, relational_pcd, relational_query_pts)
 
         corresponding_mat = infer_relation_intersection(
-            self.mc_vis, rel_optimizer, target_optimizer, 
-            relational_desc, target_desc, 
-            relational_pcd, target_pcd, relational_query_pts, 
-            target_query_pts, opt_visualize=self.args.opt_visualize)
+            self.mc_vis, rel_optimizer, target_optimizer, relational_ndf, target_ndf, 
+            current_ee_pose=ee_pose, opt_visualize=self.args.opt_visualize, visualize=True)
 
         corresponding_pose = util.pose_from_matrix(corresponding_mat)
+        #try making transform relative to object?
         corresponding_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=corresponding_pose)
-        # ee_poses = [*self.get_place_pre_poses(corresponding_pose), corresponding_pose]
-        ee_poses = [corresponding_pose]
+        print(f'best place pose is: {util.pose_stamped2list(corresponding_pose)}')
+
+        ee_poses = [*self.get_place_pre_poses(corresponding_pose), corresponding_pose]
+        # ee_poses = [corresponding_pose]
+        # ee_poses = [*self.get_place_pre_poses(corresponding_pose)]
+
+        free_memory([target_optimizer, rel_optimizer], debug=False)
         return [util.pose_stamped2list(pose) for pose in ee_poses]
 
     def get_place_pre_poses(self, corresponding_pose):
         offset_tf1 = util.list2pose_stamped(self.cfg.PREPLACE_OFFSET_TF)
+        # offset_tf1 = util.list2pose_stamped(self.cfg.PREPLACE_VERTICAL_OFFSET_TF)
+
         offset_tf2 = util.list2pose_stamped(self.cfg.PREPLACE_VERTICAL_OFFSET_TF)
         pre_ee_end_pose2 = util.transform_pose(pose_source=corresponding_pose, pose_transform=offset_tf1)
         pre_ee_end_pose1 = util.transform_pose(pose_source=pre_ee_end_pose2, pose_transform=offset_tf2) 
         return [pre_ee_end_pose1, pre_ee_end_pose2]
+        # return [pre_ee_end_pose2]
     
     def learn_skill(self, skill_name, target_pcd, obj_class):
         '''

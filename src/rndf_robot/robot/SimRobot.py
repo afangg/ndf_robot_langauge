@@ -175,7 +175,8 @@ class SimRobot(RobotParent):
     def execute(self, ee_poses):
         self.execute_pre_step()
         self.execute_traj(ee_poses)
-        self.execute_post_step()
+        if self.state != 0:
+            self.execute_post_step()
         
     def execute_pre_step(self, obj_id=None):
         if obj_id:
@@ -249,6 +250,10 @@ class SimRobot(RobotParent):
             if plan is None:
                 log_warn('FAILED TO FIND A PLAN. STOPPING')
                 break
+            if i == len(jnt_poses)-1 and self.state == 0:
+                self.execute_post_step()
+                time.sleep(0.2)
+                
             self.move_robot(plan)
             prev_pos = jnt_pos
     
@@ -274,17 +279,17 @@ class SimRobot(RobotParent):
         # turn on the physics and let things settle to evaluate success/failure
         self.robot.pb_client.set_step_sim(False)
 
-    def cascade_ik(self, ee_pose):
-        jnt_pos = None
-        if jnt_pos is None:
-            jnt_pos = self.ik_helper.get_feasible_ik(ee_pose, verbose=False)
-            if jnt_pos is None:
-                jnt_pos = self.ik_helper.get_ik(ee_pose)
-                if jnt_pos is None:
-                    jnt_pos = self.robot.arm.compute_ik(ee_pose[:3], ee_pose[3:])
-        if jnt_pos is None:
-            log_warn('Failed to find IK')
-        return jnt_pos
+    # def cascade_ik(self, ee_pose):
+    #     jnt_pos = None
+    #     if jnt_pos is None:
+    #         jnt_pos = self.ik_helper.get_feasible_ik(ee_pose, verbose=False)
+    #         if jnt_pos is None:
+    #             jnt_pos = self.ik_helper.get_ik(ee_pose)
+    #             if jnt_pos is None:
+    #                 jnt_pos = self.robot.arm.compute_ik(ee_pose[:3], ee_pose[3:])
+    #     if jnt_pos is None:
+    #         log_warn('Failed to find IK')
+    #     return jnt_pos
     
     def move_robot(self, plan):
         for jnt in plan:

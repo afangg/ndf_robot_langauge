@@ -165,7 +165,7 @@ class CameraSys:
             pcd_world = util.transform_pcd(pcd_cam, cam_pose_world)
             pcd_world_img = pcd_world.reshape(depth.shape[0], depth.shape[1], 3)
 
-            # util.meshcat_pcd_show(self.mc_vis, pcd_world, color=(0, 0, 0), name=f'scene/scene_{idx}')
+            util.meshcat_pcd_show(self.mc_vis, pcd_world, color=(0, 0, 0), name=f'scene/scene_{idx}')
 
             rgb_imgs.append(rgb)
             pcd_pts.append(pcd_world)
@@ -175,12 +175,12 @@ class CameraSys:
         pcd_full = np.concatenate(pcd_pts, axis=0)
 
         if crop_show:
-            cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.4, 0.0], [0.01, 0.35], 'table_right'
+            cropx, cropy, cropz, crop_note = [0.2, 0.75], [-0.4, 0.4], [0.01, 0.7], 'table'
             bounds = (cropx, cropy, cropz)
             proc_pcd = manually_segment_pcd(pcd_full, bounds=bounds, mean_inliers=True)
         else:
             proc_pcd = pcd_full
-        util.meshcat_pcd_show(self.mc_vis, proc_pcd, name=f'scene/pcd_world_cam_{idx}')
+        util.meshcat_pcd_show(self.mc_vis, proc_pcd, name=f'scene/cropped_scene')
 
         # util.meshcat_pcd_show(self.mc_vis, pcd_full, color=(0, 255, 0), name='scene/full_scene')
         return pcd_2ds, rgb_imgs, depth_imgs

@@ -3,7 +3,6 @@ from .language_utils import MiniLM, identify_classes_from_query
 
 class PromptModule:
     def __init__(self, skill_names, obj_classes) -> None:
-        self.langInterpreter = MiniLM()
         self.skill_names = skill_names   
         self.obj_classes = obj_classes 
 
@@ -17,7 +16,7 @@ class PromptModule:
         log_debug('All demo labels: %s' %self.skill_names)
         while True:
             query = self.ask_query()
-            # query = "grasp mug_handle", "grab the mug by the handle"
+            # query = "place_relative mug_in tray", "move mug to the tray upside down"
             if not query: return
             best_skill, query_text = query
             break
@@ -29,11 +28,13 @@ class PromptModule:
 
         return: the concept most similar to their query and their input text
         '''
+        langInterpreter = MiniLM()
+
         while True:
             query_text = input('Please enter a query or \'reset\' to reset the scene\n')
             if not query_text: continue
             if query_text.lower() == "reset": return
-            ranked_concepts = self.langInterpreter.find_correspondence(self.skill_names, query_text)
+            ranked_concepts = langInterpreter.find_correspondence(self.skill_names, query_text)
             best_skill = None
             for concept in ranked_concepts:
                 print('Corresponding concept:', concept)
@@ -46,6 +47,7 @@ class PromptModule:
             
             if best_skill:
                 break
+        del langInterpreter
         return best_skill, query_text
     
     def get_keywords_and_classes(self, prompt, state):

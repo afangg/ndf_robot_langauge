@@ -1,4 +1,5 @@
 import torch
+import gc
 import argparse
 import meshcat
 import random
@@ -66,12 +67,13 @@ class Pipeline:
             state = 0
         elif action.startswith('place'):
             state = 1
-        elif action.startswith('place') and state == -1:
-            state = 2
+        # elif action.startswith('place') and state == -1:
+        #     state = 2
 
         self.robot.state = state
 
         keywords, rank_to_class = self.prompter.get_keywords_and_classes(prompt, state)
+        log_debug(f'relevant objs: {rank_to_class}')
         self.system_env.assign_nouns(rank_to_class)
         obj_desc = [keyword[1] if keyword[1] else keyword[0] for keyword in keywords]
         return action, self.system_env.get_relevant_classes(), geometry, obj_desc
@@ -83,8 +85,9 @@ class Pipeline:
             labels = {}
             for obj_id, info in self.system_env.obj_info.items():
                 labels[obj_id] = info['class']
-            
+        
         labels_to_pcds = self.vision_mod.segment_all_scenes(labels)
+            
         if not labels_to_pcds:
             log_warn('WARNING: Target object not detected, try again')
             return False, None
@@ -109,17 +112,19 @@ class Pipeline:
                           'place_relative': self.robot.place_relative,}
         self.system_env.next_iter()
         while True:
-            run(self.system_env, self.FUNCTIONS)
+            run(self.FUNCTIONS)
             self.system_env.next_iter()
 
-def run(system_env: Environment, FUNCTIONS):
-    prompt_output = FUNCTIONS['ask']()
+def run(FUNCTIONS):
+    with torch.no_grad():
+        prompt_output = FUNCTIONS['ask']()
     torch.cuda.empty_cache()
     if prompt_output is None:
         return
     
     action, obj_classes, geometry, obj_desc = prompt_output
-    segmentation_success, pcds = FUNCTIONS['find'](obj_desc)
+    with torch.no_grad():
+        segmentation_success, pcds = FUNCTIONS['find'](obj_desc)
     torch.cuda.empty_cache()
     if not segmentation_success:
         return
@@ -131,10 +136,11 @@ def run(system_env: Environment, FUNCTIONS):
     skill_func = FUNCTIONS[action]
 
     pcd_class_pairs = zip(pcds, obj_classes)
+
     skill_func(*pcd_class_pairs, geometry)
+    gc.collect()
     torch.cuda.empty_cache()
 
-    
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--debug', action='store_true')

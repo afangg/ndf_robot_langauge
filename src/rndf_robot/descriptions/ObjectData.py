@@ -30,7 +30,7 @@ OBJECT_CLASSES = {
              'bad_ids': [], 
              'upright_orientation': common.euler2quat([0, 0, 0]).tolist(), 
              'scale_defaults': 1.0},
-    'tray': {'mesh_data': 'box_containers_unnormalized',
+    'container': {'mesh_data': 'box_containers_unnormalized',
                   'model_weights': 'ndf_container.pth',
                   'bad_ids': [], 
                   'upright_orientation': common.euler2quat([0, 0, 0]).tolist(), 

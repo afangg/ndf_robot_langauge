@@ -143,6 +143,9 @@ class Position:
         self.x = 0.
         self.y = 0.
         self.z = 0.
+    
+    def __str__(self) -> str:
+        return f'({self.x}, {self.y}, {self.z})'
 
 
 class Orientation:
@@ -152,12 +155,16 @@ class Orientation:
         self.z = 0.
         self.w = 0.
 
-
+    def __str__(self) -> str:
+        return f'({self.x}, {self.y}, {self.z}, {self.w})'
+    
 class Pose:
     def __init__(self, position, orientation):
         self.position = position
         self.orientation = orientation
 
+    def __str__(self) -> str:
+        return f'Pose: {str(self.position)}, {str(self.orientation)}'
 
 class Header:
     def __init__(self):
@@ -172,6 +179,9 @@ class PoseStamped():
         header = Header()
         self.pose = pose
         self.header = header
+
+    def __str__(self) -> str:
+        return str(self.pose)
 
 
 def get_2d_pose(pose3d):

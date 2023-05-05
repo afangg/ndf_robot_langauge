@@ -10,10 +10,12 @@ from airobot import log_warn, log_debug
 ARTICLES = {'a', 'an', 'the'}
 
 tagger = SequenceTagger.load('flair/chunk-english')
+tagger.eval()
 
 class MiniLM:
     def __init__(self) -> None:
         self.llm = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+        self.llm.eval()
 
     def find_correspondence(self, existing_concepts, query):
         '''

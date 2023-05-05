@@ -1,8 +1,7 @@
 import os, os.path as osp
 from rndf_robot.data.NDFLibrary import NDFLibrary
-from rndf_robot.utils import path_util
-
-from IPython import embed
+from rndf_robot.utils import path_util, util
+from airobot import log_debug, log_warn, log_info
 
 class Robot:
     def __init__(self, args, skill_library: NDFLibrary, mc_vis, cfg=None) -> None:
@@ -51,6 +50,25 @@ class Robot:
 
     # Motion Plan
 
+    def cascade_ik(self, ee_pose):
+        jnt_pos = None
+        
+        if jnt_pos is None:
+            jnt_pos = self.ik_helper.get_feasible_ik(ee_pose, verbose=False)
+            if jnt_pos is None:
+                jnt_pos = self.ik_helper.get_ik(ee_pose)
+        if jnt_pos is None:
+            rotated_in_z = util.body_world_yaw(util.list2pose_stamped(ee_pose), 3.1415)
+            rotated_in_z = util.pose_stamped2list(rotated_in_z)
+            log_debug(f'before {ee_pose}, after {rotated_in_z}')
+            jnt_pos = self.ik_helper.get_feasible_ik(rotated_in_z, verbose=False)
+            if jnt_pos is None:
+                jnt_pos = self.ik_helper.get_ik(rotated_in_z)
+
+        if jnt_pos is None:
+            log_warn('Failed to find IK')
+        return jnt_pos
+
     def go_home(self):
         pass
 
@@ -79,8 +97,10 @@ class Robot:
         '''
         target_pcd, target_class = target
         ee_poses = self.skill_library.grasp(target_pcd, target_class, geometry)
+        if ee_poses is None:
+            return
         self.execute(ee_poses)
-        # self.ee_poses = ee_poses[-1] if sucess else None
+        self.last_ee_pose = ee_poses[-1]
         return self.last_ee_pose
     
     def place(self, target, geometry):
@@ -101,7 +121,10 @@ class Robot:
                 If grasp fails, returns None
         '''
         target_pcd, target_class = target
-        ee_poses = self.skill_library.place(target_pcd, target_class, geometry, self.get_ee_pose())
+
+        if self.last_ee_pose is None:
+            self.last_ee_pose = self.get_ee_pose()
+        ee_poses = self.skill_library.place(target_pcd, target_class, geometry, self.last_ee_pose)
         self.execute(ee_poses)
         # self.last_ee_pose = ee_poses[-1] if sucess else None
         return self.last_ee_pose
@@ -125,7 +148,11 @@ class Robot:
             new_position (Array-like, length 3): Final position of the EE, after performing the move action.
                 If grasp fails, returns None
         '''
-        ee_poses = self.skill_library.place_relative(target, relational, geometry, self.get_ee_pose())
+        if self.last_ee_pose is None:
+            self.last_ee_pose = self.get_ee_pose()
+        ee_poses = self.skill_library.place_relative(target, relational, geometry, self.last_ee_pose)
+        if ee_poses is None:
+            return
         self.execute(ee_poses)
         # self.last_ee_pose = ee_poses[-1] if sucess else None
         return self.last_ee_pose
