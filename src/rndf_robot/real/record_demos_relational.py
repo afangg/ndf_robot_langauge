@@ -60,6 +60,7 @@ def segment(pcd, top_n=1, eps=0.005, min_points=50, min_z=None):
         sz = cluster.shape[0]
         cluster_sizes.append(sz)
     topNsz = np.argsort(cluster_sizes)[-top_n:]
+    return topNsz
 
 def main(args):
     #############################################################################
@@ -378,7 +379,7 @@ def main(args):
             cam_poses_list = []
             rgb_imgs = []
             depth_imgs = []
-            sam_seg = SAMSeg()
+            sam_seg = SAMSeg(cuda=True)
             for idx, cam in enumerate(cams.cams):
                 rgb, depth = realsense_interface.get_rgb_and_depth_image(pipelines[idx])
                 rgb_imgs.append(rgb)                
@@ -457,7 +458,7 @@ def main(args):
 
             else:  # y-axis
                 # get all clusters that are on the positive and negative side of the y-axis
-                top2clusters = segment(proc_pcd, top_n=2, eps=0.008, min_points=20)
+                proc_pcd = segment(proc_pcd, top_n=2, eps=0.008, min_points=20)
 
                 pos_y_proc_pcd = proc_pcd[np.where(proc_pcd[:, 1] > 0.0)[0]]
                 neg_y_proc_pcd = proc_pcd[np.where(proc_pcd[:, 1] < 0.0)[0]]

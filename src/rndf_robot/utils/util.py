@@ -183,6 +183,15 @@ class PoseStamped():
     def __str__(self) -> str:
         return str(self.pose)
 
+def rotate_grasp(grasp, theta):
+    z_r = np.eye(3)
+    z_r[:2,:2] = np.array([[np.cos(theta), -np.sin(theta)],[np.sin(theta), np.cos(theta)]])
+    z_rot = np.eye(4)
+    z_rot[:3,:3] = z_r
+    z_rot = np.matmul(z_rot, np.linalg.inv(grasp))
+    z_rot = np.matmul(grasp, z_rot)
+    grasp = np.matmul(z_rot, grasp)
+    return grasp
 
 def get_2d_pose(pose3d):
     #1. extract rotation about z-axis

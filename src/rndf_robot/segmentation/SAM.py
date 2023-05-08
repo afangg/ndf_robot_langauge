@@ -7,12 +7,13 @@ from segment_anything import sam_model_registry, SamPredictor
 from huggingface_hub import hf_hub_download
 
 class SAMSeg:
-    def __init__(self):
+    def __init__(self, cuda=False):
         chkpt_path = hf_hub_download("ybelkada/segment-anything", "checkpoints/sam_vit_h_4b8939.pth")
         model_type = "vit_h"
         sam = sam_model_registry[model_type](checkpoint=chkpt_path)
         sam.eval()
-        # sam.to(device='cuda')
+        if cuda:
+            sam.to(device='cuda')
         self.predictor = SamPredictor(sam)
 
     def masks_from_bbs(self, image, all_obj_bbs):

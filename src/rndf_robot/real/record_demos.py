@@ -20,7 +20,7 @@ from airobot import log_info, log_warn, log_debug, log_critical, set_log_level
 
 from rndf_robot.utils import util, path_util
 from rndf_robot.utils.visualize import PandaHand, Robotiq2F140Hand
-from rndf_robot.utils.record_demo_utils import DefaultQueryPoints
+from rndf_robot.utils.record_demo_utils import DefaultQueryPoints, convert_wrist2tip
 
 from rndf_robot.robot.franka_ik import FrankaIK #, PbPlUtils
 from rndf_robot.cameras.simple_multicam import MultiRealsenseLocal
@@ -112,12 +112,24 @@ def main(args):
     planning.set_gripper_open_pos(gripper_open_pos)
     planning.gripper_open()
 
+
     if args.gripper_type == '2f140':
         grasp_pose_viz = Robotiq2F140Hand(grasp_frame=False)
         place_pose_viz = Robotiq2F140Hand(grasp_frame=False)
+        wrist2tip_tf = [0, 0, 0.24, 0, 0, 0, 1.0]
+        tip2wrist_tf = [0, 0, -0.24, 0, 0, 0, 1.0]
     else:
         grasp_pose_viz = PandaHand(grasp_frame=True)
         place_pose_viz = PandaHand(grasp_frame=True)
+        wrist2tip_tf = [0, 0, 0.1034, 0, 0, -0.3827, 0.9239]
+        tip2wrist_tf = [0, 0, -0.1034, 0, 0, 0.3827, 0.9239]
+
+    # if args.gripper_type == '2f140':
+    #     grasp_pose_viz = Robotiq2F140Hand(grasp_frame=False)
+    #     place_pose_viz = Robotiq2F140Hand(grasp_frame=False)
+    # else:
+    #     grasp_pose_viz = PandaHand(grasp_frame=True)
+    #     place_pose_viz = PandaHand(grasp_frame=True)
     grasp_pose_viz.reset_pose()
     place_pose_viz.reset_pose()
     grasp_pose_viz.meshcat_show(mc_vis, name_prefix='grasp_pose')
@@ -588,8 +600,8 @@ def main(args):
             util.meshcat_frame_show(mc_vis, 'scene/custom_query_points_pose', util.matrix_from_pose(util.list2pose_stamped(current_ee_query_pose)))
 
             # this is the pose of the point in between the fingertips
-            # current_ee_query_pose = convert_wrist2tip(current_ee_query_pose, wrist2tip_tf=wrist2tip_tf) 
-            # util.meshcat_frame_show(mc_vis, 'scene/custom_query_points_pose_tip', util.matrix_from_pose(util.list2pose_stamped(current_ee_query_pose)))
+            current_ee_query_pose = convert_wrist2tip(current_ee_query_pose, wrist2tip_tf=wrist2tip_tf) 
+            util.meshcat_frame_show(mc_vis, 'scene/custom_query_points_pose_tip', util.matrix_from_pose(util.list2pose_stamped(current_ee_query_pose)))
 
             custom_query_points = copy.deepcopy(query_point_info.default_origin_pts)
             custom_query_points = util.transform_pcd(custom_query_points, util.matrix_from_pose(util.list2pose_stamped(current_ee_query_pose)))

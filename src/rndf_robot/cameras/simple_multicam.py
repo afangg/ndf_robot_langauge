@@ -54,7 +54,7 @@ class MultiRealsenseLocal:
         """
         _C = CN()
         _C.ZNEAR = 0.01
-        _C.ZFAR = 1.2
+        _C.ZFAR = 2.0
         _C.WIDTH = self.width
         _C.HEIGHT = self.height
         _C.FOV = 60

@@ -70,16 +70,21 @@ class RealRobot(Robot):
         cam_obs2.export(cam2_obs_fname)
 
         self.ik_helper.register_object(
-        table_obs_fname,
-        pos=[0.15 + 0.77/2.0, 0.0, 0.0015],
-        ori=[0, 0, 0, 1],
-        name='table')
+            table_obs_fname,
+            pos=[0.15 + 0.77/2.0, 0.0, 0.0015],
+            ori=[0, 0, 0, 1],
+            name='table')
 
         self.ik_helper.register_object(
-        cam1_obs_fname,
-        pos=[0.0, -0.525, 0.25],  # pos=[0.135, -0.525, 0.25],
-        ori=[0, 0, 0, 1],
-        name='cam2')
+            cam1_obs_fname,
+            pos=[0.0, -0.525, 0.25],  # pos=[0.135, -0.525, 0.25],
+            ori=[0, 0, 0, 1],
+            name='cam2')
+        self.ik_helper.register_object(
+            cam2_obs_fname,
+            pos=[0.55, -0.525, 0.25],  # pos=[0.135, -0.525, 0.25],
+            ori=[0, 0, 0, 1],
+            name='cam1')
 
     #################################################################################################
     # Controls
@@ -141,13 +146,13 @@ class RealRobot(Robot):
                 if 1 in self.ranked_objs:
                     del self.ranked_objs[1]
 
-    def execute(self, ee_poses):
+    def execute(self, ee_poses, place=False):
         for i, ee_pose in enumerate(ee_poses):
             pose = util.body_world_yaw(util.list2pose_stamped(ee_pose), theta=0)
             pose = util.matrix_from_pose(pose)
             util.meshcat_obj_show(self.mc_vis, self.ee_file, pose, 1.0, name=f'ee/ee_{i}')
 
-        jnt_poses = [self.cascade_ik(pose) for pose in ee_poses]
+        jnt_poses = [self.cascade_ik(pose, place=place) for pose in ee_poses]
 
         start_pose = None
         joint_traj = []

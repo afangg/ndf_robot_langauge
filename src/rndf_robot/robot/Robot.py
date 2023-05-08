@@ -2,6 +2,9 @@ import os, os.path as osp
 from rndf_robot.data.NDFLibrary import NDFLibrary
 from rndf_robot.utils import path_util, util
 from airobot import log_debug, log_warn, log_info
+import numpy as np
+from IPython import embed
+
 
 class Robot:
     def __init__(self, args, skill_library: NDFLibrary, mc_vis, cfg=None) -> None:
@@ -50,20 +53,36 @@ class Robot:
 
     # Motion Plan
 
-    def cascade_ik(self, ee_pose):
+    def cascade_ik(self, ee_pose, place=False):
         jnt_pos = None
         
         if jnt_pos is None:
             jnt_pos = self.ik_helper.get_feasible_ik(ee_pose, verbose=False)
             if jnt_pos is None:
                 jnt_pos = self.ik_helper.get_ik(ee_pose)
-        if jnt_pos is None:
-            rotated_in_z = util.body_world_yaw(util.list2pose_stamped(ee_pose), 3.1415)
-            rotated_in_z = util.pose_stamped2list(rotated_in_z)
-            log_debug(f'before {ee_pose}, after {rotated_in_z}')
-            jnt_pos = self.ik_helper.get_feasible_ik(rotated_in_z, verbose=False)
+        if jnt_pos is not None:
+            return jnt_pos
+        
+        if not place and jnt_pos is None:
+            embed()
+            rotated_ee_mat = util.rotate_grasp(util.matrix_from_pose(util.list2pose_stamped(ee_pose)), np.pi)
+            rotated_ee = util.pose_stamped2list(util.pose_from_matrix(rotated_ee_mat))
             if jnt_pos is None:
-                jnt_pos = self.ik_helper.get_ik(rotated_in_z)
+                jnt_pos = self.ik_helper.get_feasible_ik(rotated_ee, verbose=False)
+                if jnt_pos is None:
+                    jnt_pos = self.ik_helper.get_ik(rotated_ee)
+
+        if place and jnt_pos is None:
+            for _ in range(3):
+                rotated_in_z = util.rand_body_yaw_transform(ee_pose[:3])
+                rotated_in_z = util.pose_stamped2list(rotated_in_z)
+                log_debug(f'before {ee_pose}, after {rotated_in_z}')
+                jnt_pos = self.ik_helper.get_feasible_ik(rotated_in_z, verbose=False)
+                if jnt_pos is None:
+                    jnt_pos = self.ik_helper.get_ik(rotated_in_z)
+                
+                if jnt_pos is not None:
+                    break
 
         if jnt_pos is None:
             log_warn('Failed to find IK')
@@ -72,7 +91,7 @@ class Robot:
     def go_home(self):
         pass
 
-    def execute(self, ee_poses):
+    def execute(self, ee_poses, place=False):
         pass
 
     #################################################################################################
@@ -120,6 +139,7 @@ class Robot:
             new_position (Array-like, length 3): Final position of the EE, after performing the move action.
                 If grasp fails, returns None
         '''
+        #TODO: Use custom query points!
         target_pcd, target_class = target
 
         if self.last_ee_pose is None:

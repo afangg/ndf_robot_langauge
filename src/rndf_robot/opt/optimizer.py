@@ -130,6 +130,8 @@ class OccNetOptimizer:
         demo_latents_list = []
         for i in range(len(self.demo_info)):
             # load in information from target
+            if not self.demo_info[i]['demo_obj_pts'].any():
+                continue
             demo_shape_pts_world = self.demo_info[i]['demo_obj_pts']
             demo_query_pts_world = self.demo_info[i]['demo_query_pts']
             demo_shape_pts_world = torch.from_numpy(demo_shape_pts_world).float().to(self.dev)
@@ -153,6 +155,7 @@ class OccNetOptimizer:
             demo_latents_list.append(target_latent.squeeze())
         target_act_hat_all = torch.stack(demo_feats_list, 0)
         target_act_hat = torch.mean(target_act_hat_all, 0)
+
         return target_act_hat
 
     def get_pose_descriptor(self, shape_pts_world_np, external_obj_pose_mat, return_shape_latent=False): 
@@ -207,7 +210,6 @@ class OccNetOptimizer:
             assert self.target_info is not None, 'Target info not set! Need to set the targets for single object optimization'
 
         ##### obtain the activations from the demos ####
-
         if target_act_hat is None:
             target_act_hat = self.get_target_act_hat()
 

@@ -172,9 +172,9 @@ class SimRobot(RobotParent):
         self.robot.arm.go_home(ignore_physics=True)
         self.robot.arm.move_ee_xyz([0, 0, 0.2])
 
-    def execute(self, ee_poses):
+    def execute(self, ee_poses, place=False):
         self.execute_pre_step()
-        self.execute_traj(ee_poses)
+        self.execute_traj(ee_poses, place=place)
         if self.state != 0:
             self.execute_post_step()
         
@@ -233,13 +233,13 @@ class SimRobot(RobotParent):
             else:
                 self.state = 0
 
-    def execute_traj(self, ee_poses):
+    def execute_traj(self, ee_poses, place=False):
         for i, ee_pose in enumerate(ee_poses):
             pose = util.body_world_yaw(util.list2pose_stamped(ee_pose), theta=-1.5708)
             pose = util.matrix_from_pose(pose)
             util.meshcat_obj_show(self.mc_vis, self.ee_file, pose, 1.0, name=f'ee/ee_{i}')
 
-        jnt_poses = [self.cascade_ik(pose) for pose in ee_poses]
+        jnt_poses = [self.cascade_ik(pose, place=place) for pose in ee_poses]
         prev_pos = self.get_jpos()
         for i, jnt_pos in enumerate(jnt_poses):
             if jnt_pos is None:

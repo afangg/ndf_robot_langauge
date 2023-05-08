@@ -335,7 +335,7 @@ class NDFLibrary:
         
         pose_mats, best_idx, losses = optimizer.optimize_transform_implicit(target_pcd, ee=True, opt_visualize=True, return_score_list=True)
         
-        
+        #TODO: Add something to determine the offset - if object z is much lower that target pose, offset from top vs if xy is greater, come from the side
         
         for pose_idx in torch.argsort(torch.stack(losses)):
             potential_mat = pose_mats[pose_idx]
@@ -359,16 +359,31 @@ class NDFLibrary:
                                                                grasp_viz=self.args.grasp_viz, 
                                                                grasp_dist_thresh=self.args.grasp_dist_thresh)
         corresponding_pose = util.list2pose_stamped(corresponding_pose_list)
+        corresponding_pose_list = util.pose_stamped2list(corresponding_pose)
+        corresponding_pose_list[:3] = post_process_grasp_point(corresponding_pose_list, 
+                                                               target_pcd, 
+                                                               thin_feature=(not self.args.non_thin_feature), 
+                                                               grasp_viz=self.args.grasp_viz, 
+                                                               grasp_dist_thresh=self.args.grasp_dist_thresh)
+        corresponding_pose = util.list2pose_stamped(corresponding_pose_list)
 
-        offset_tf1 = util.list2pose_stamped(get_ee_offset(ee_pose=corresponding_pose_list))
-        pre_ee_end_pose1 = util.transform_pose(pose_source=util.list2pose_stamped(corresponding_pose_list), pose_transform=offset_tf1)
         offset_pose = util.transform_pose(
             pose_source=corresponding_pose,
             pose_transform=util.list2pose_stamped([0, 0, 0.15, 0, 0, 0, 1])
         )
-        ee_poses = [pre_ee_end_pose1, corresponding_pose, offset_pose]
+        ee_poses = [*self.get_grasp_pre_poses(corresponding_pose), corresponding_pose, offset_pose]
         free_memory([optimizer], debug=False)
         return [util.pose_stamped2list(pose) for pose in ee_poses]
+    
+    def get_grasp_pre_poses(self, corresponding_pose):
+        corresponding_pose_list = util.pose_stamped2list(corresponding_pose)
+        offset_tf1 = util.list2pose_stamped(get_ee_offset(ee_pose=corresponding_pose_list))
+        offset_tf2 = util.list2pose_stamped(self.cfg.PREPLACE_VERTICAL_OFFSET_TF)
+
+        pre_ee_end_pose2 = util.transform_pose(pose_source=util.list2pose_stamped(corresponding_pose_list), pose_transform=offset_tf1)
+        pre_ee_end_pose1 = util.transform_pose(pose_source=pre_ee_end_pose2, pose_transform=offset_tf2)
+        # pre_ee_end_pose1 = util.transform_pose(pose_source=pre_ee_end_pose2, pose_transform=offset_tf2) 
+        return [pre_ee_end_pose1, pre_ee_end_pose2]
     
     def place(self, target_pcd, obj_class, geometry, ee_pose):        
         '''
