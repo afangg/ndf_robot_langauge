@@ -525,12 +525,13 @@ class NDFLibrary:
             elif i == 'b':
                 return 
         
+        action, skill = skill_name[:skill_name.find(' ')], skill_name[skill_name.find(' ')+1:]
         if not osp.exists(demo_dir_path):
             log_warn(f'{demo_dir_path} path does not exist, failed to create skill')
             return
         
-        self.add_demo_dir(skill_name, demo_dir_path)
-        geometry = skill_name.split('_')[-1]
+        self.add_demo_dir(skill, demo_dir_path)
+        geometry = skill.split('_')[-1]
         self.ndf_primitives[skill_type]['obj_classes'].add(obj_class)
         self.ndf_primitives[skill_type]['geometry'].add((obj_class, geometry))
         
