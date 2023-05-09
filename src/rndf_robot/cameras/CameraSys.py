@@ -75,17 +75,18 @@ class CameraSys:
         cam_interface = RealsenseLocal()
         return cams, pipelines, cam_interface
     
-    def get_pb_seg(self, obj_id_to_class, table_id=None, link_id=None, crop_show=True):
+    def get_pb_seg(self, obj_id_to_class, table_id=None, crop_show=True):
         '''
         obj_id_to_class (dic): {obj_id: obj_class}
+
+        return: {obj_class: [(score, pcd, obj_id, clip embedding)]}
         '''
 
         pc_obs_info = {}
         for obj_id in obj_id_to_class:
-            pc_obs_info[obj_id] = []
+            pc_obs_info[obj_id] = {'pcd': [], 'rbgs': []}
 
         all_table_pts = []
-        all_table_obj_pts = []
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
             rgb, depth, pyb_seg = cam.get_images(get_rgb=True, get_depth=True, get_seg=True)
@@ -97,46 +98,38 @@ class CameraSys:
             for obj_id in obj_id_to_class:
                 obj_inds = np.where(flat_seg == obj_id)                
                 obj_pts = pts_raw[obj_inds[0], :]
-                # pc_obs_info['pcd_pts'][obj_id].append(util.crop_pcd(obj_pts))
-                pc_obs_info[obj_id].append(obj_pts)
-            
+                pc_obs_info[obj_id]['pcd'].append(obj_pts)
+                pc_obs_info[obj_id]['rgbs'].append(rgb.flatten()[obj_inds])
+
             if table_id:
                 table_inds = np.where(flat_seg == table_id)                
                 table_pts = pts_raw[table_inds[0], :]
                 all_table_pts.append(table_pts)
-            if link_id:
-                table_obj_val = table_id + ((link_id+1) << 24)
-                table_obj_inds = np.where(flat_seg == table_obj_val)
-                table_obj_pts = pts_raw[table_obj_inds[0], :]
-                all_table_obj_pts.append(table_obj_pts)
 
         if all_table_pts != []:
             table_pcd = np.concatenate(all_table_pts, axis=0)  # object shape point cloud
             util.meshcat_pcd_show(self.mc_vis, table_pcd, color=(0,0,255), name='scene/table_pcd')
 
-        if all_table_obj_pts != []:
-            table_obj_pts = np.concatenate(all_table_obj_pts, axis=0)  # object shape point cloud
-            util.meshcat_pcd_show(self.mc_vis, table_obj_pts, color=(0,100,100), name='scene/table_obj_pcd')
-
         pcds_output = {}
-        for obj_id, obj_pcd_pts in pc_obs_info.items():
-            if not obj_pcd_pts:
+        for obj_id, obj_info in pc_obs_info.items():
+            if obj_info['pcd'] == []:
                 log_warn(f'WARNING: COULD NOT FIND {obj_id} OBJ')
                 continue
 
-            target_obj_pcd_obs = np.concatenate(obj_pcd_pts, axis=0)  # object shape point cloud
+            target_obj_pcd_obs = np.concatenate(obj_info['pcd'], axis=0)  # object shape point cloud
             target_obj_pcd_obs = manually_segment_pcd(target_obj_pcd_obs, mean_inliers=True)
 
             if not target_obj_pcd_obs.all():
                 log_warn(f'WARNING: COULD NOT FIND {obj_id} OBJ')
                 continue
-            
+
+            clip_embeddings = None
             obj_class = obj_id_to_class[obj_id]
             util.meshcat_pcd_show(self.mc_vis, target_obj_pcd_obs, color=(255, 0, 0), name=f'scene/{obj_class}_{obj_id}')
 
             if obj_class not in pcds_output:
                 pcds_output[obj_class] = []
-            pcds_output[obj_class].append((1.0, target_obj_pcd_obs, obj_id))
+            pcds_output[obj_class].append((1.0, target_obj_pcd_obs, obj_id, clip_embeddings))
         return pcds_output
     
     def get_all_real_views(self, crop_show=True):

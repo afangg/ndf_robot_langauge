@@ -19,7 +19,6 @@ def process_grasp_data(demo_data, query_pts):
     """
     grasp_ee_pose_mat = util.matrix_from_pose(util.list2pose_stamped(demo_data['ee_pose_world']))
     demo_obj_pts = demo_data['object_pointcloud']
-    # demo_query_pts = demo_data['gripper_pts_uniform'] 
     demo_query_pts = copy.deepcopy(query_pts)
     demo_query_pts = util.transform_pcd(demo_query_pts, grasp_ee_pose_mat)
 

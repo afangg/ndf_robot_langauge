@@ -7,7 +7,6 @@ from rndf_robot.cameras.CameraSys import CameraSys
 from rndf_robot.utils import util
 
 from airobot import log_warn, log_debug
-from IPython import embed
 
 METHODS = {'bbox', 'point', 'owl', 'pb_seg'}
 class VisionModule:
@@ -35,8 +34,12 @@ class VisionModule:
     def pybullet_seg(self, obj_id_to_class):
         assert self.seg_method == 'pb_seg', 'Seg method does not use PyBullet'
         return self.camera_sys.get_pb_seg(obj_id_to_class)
-
-    def language_seg(self, captions, centroid_thresh=0.1, detect_thresh=0.4):
+    
+    def language_seg(self, captions, centroid_thresh=0.15, detect_thresh=0.4):
+        '''
+        captions (list of strings)
+        return: {obj_class: [(score, pcd, obj_id, clip embedding)]}
+        '''
         pcd_2ds, rgb_imgs, valid_depths = self.camera_sys.get_all_real_views(crop_show=True)
  
         label_to_pcds = {}
@@ -91,7 +94,6 @@ class VisionModule:
             for obj_label, obj_masks in all_obj_masks.items():
                 log_debug(f'Mask count for {obj_label}: {len(obj_masks)}')
                 obj_pcds, obj_scores = pcds_from_masks(pcd_2d, valid, obj_masks, all_obj_bb_scores[obj_label])
-                log_debug(f'{obj_label} after filtering is now {len(obj_pcds)}')
                 obj_pcds, obj_scores = filter_pcds(obj_pcds, obj_scores, mean_inliers=True, downsample=True)
 
                 if not obj_pcds:
@@ -108,10 +110,9 @@ class VisionModule:
                                                        label_to_scores[obj_label], 
                                                        threshold=centroid_thresh)
                     label_to_pcds[obj_label], label_to_scores[obj_label] = new_pcds, new_lables
-                log_debug(f'{obj_label} size is now {len(label_to_pcds[obj_label])}')
         
         pcds_output = {}
-
+        
         for obj_label in captions:
             if obj_label not in label_to_pcds:
                 log_warn(f'WARNING: COULD NOT FIND {obj_label} OBJ')

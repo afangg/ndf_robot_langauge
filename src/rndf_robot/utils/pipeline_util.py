@@ -5,6 +5,7 @@ import time
 import pybullet as p
 import copy
 from rndf_robot.utils import util, trimesh_util
+from rndf_robot.data.demo_data_processing import *
 
 def soft_grasp_close(robot, joint_id2, force=100):
     p.setJointMotorControl2(robot.arm.robot_id, joint_id2, p.VELOCITY_CONTROL, targetVelocity=-1, force=force)
@@ -97,12 +98,20 @@ def process_xq_rs_data(data, table_obj=None):
         return gt_place_demo_pts
 
 def process_demo_data(data, initial_pose=None, table_obj=None):
+    initial_pose = None
     if table_obj is None:
-        demo_info, initial_pose = grasp_demo(data)
+        # demo_info, initial_pose = grasp_demo(data)
+        query_pts, query_pts_viz = extract_grasp_query_points(data)
+        demo_info = process_grasp_data(data, query_pts)
     else:
-        demo_info = place_demo(data, initial_pose, table_obj=table_obj)
-        if not demo_info:
-            return False, None
+        query_pts_type = None
+        if not table_obj:
+            query_pts_type = 'custom'
+        query_pts, query_pts_viz = extract_place_query_points(data, query_pts_type=query_pts_type, placement_surface=table_obj)
+        demo_info = process_place_data(data, query_pts)
+        # demo_info = place_demo(data, initial_pose, table_obj=table_obj)
+        # if not demo_info:
+        #     return False, None
 
     return demo_info, initial_pose
 

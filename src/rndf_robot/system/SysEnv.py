@@ -39,59 +39,6 @@ class Environment:
         self.robot = robot
         self.setup_random_scene()
 
-    def next_iter(self):
-        while True:
-            i = input(
-                '''What should we do
-                    [h]: Move to home
-                    [o]: Open/Close gripper
-                    [c]: Open gripper
-                    [n]: Continue to next iteration
-                    [g]: *SIM ONLY* - generate a new random scene from configs
-                    [i]: *REAL ONLY* - to set into low stiffness mode
-                    [l]: *REAL ONLY* - to lock into current configuration with high stiffness
-                    [em]: Launch interactive mode
-                    [clear]: Clears the env variables - will segment everything again
-                ''')
-            
-            if i == 'h':
-                self.robot.go_home()
-                continue
-            elif i == 'o':
-                self.robot.gripper_state(open=True)
-            elif i == 'c':
-                self.robot.gripper_state(open=False)
-            elif i == 'n':
-                self.mc_vis['scene'].delete()
-                self.mc_vis['optimizer'].delete()
-                self.mc_vis['ee'].delete()
-                break
-            elif i == 'g':
-                self.robot.delete_scene(list(self.obj_info.keys()))
-                self.obj_info = {}
-                self.ranked_objs = {}     
-
-                self.setup_random_scene()
-                continue
-            elif i == 'i':
-                if isinstance(self.robot, RealRobot):
-                    self.robot.gravity_comp(on=True)
-                continue
-            elif i == 'l':
-                if isinstance(self.robot, RealRobot):
-                    self.robot.gravity_comp(on=False)
-                continue
-            elif i =='em':
-                embed()
-            elif i == 'clear':
-                self.ranked_objs = {}     
-                self.robot.state = -1
-                continue
-            else:
-                print('Unknown command')
-                continue
-        torch.cuda.empty_cache()
-
     def assign_nouns(self, rank_to_class):
         log_warn('Clearing ranked object dictionary')
         self.ranked_objs = rank_to_class
@@ -186,60 +133,20 @@ class Environment:
                     }
                     self.obj_info[obj_id] = obj
 
-    def update_obj_info(self, obj_id, obj):
-        '''
-        Updates the info stored in self.obj_info with the key obj_id with values in obj
-        Warning: May override existing information
+    def intake_segmentation(self, labels_to_pcds):
+        for label, infos in labels_to_pcds.items():
+            for info in infos:
+                score, pcd, obj_id = info
+                if obj_id is None:
+                    obj_id = len(self.obj_info)
+                self.obj_info[obj_id] = {'class': label, 'score': score, 'pcd': pcd}
 
-        Args:
-            obj_id (dic): 
-            obj (dic): Dictionary containing information about the object to add
-        '''
-        assert obj_id in self.obj_info
-        for key, val in obj:
-            self.obj_info[obj_id][key] = val
+    def delete_sim_scene(self):
+        self.robot.delete_scene(list(self.obj_info.keys()))
+        self.obj_info = {}
+        self.clear_obj_info()
+        self.setup_random_scene()
 
-    def add_obj(self, obj):
-        '''
-        Adds a new object to self.obj_info and the information contained in obj.
-
-        Args:
-            obj (dic): Dictionary containing information about the object to add
-        '''
-        new_key = len(self.obj_info)
-        self.obj_info[new_key] = {}
-        self.update_obj_info(new_key, obj)
-
-    def add_attribute(self, attribute_key, attribute_val, obj_id=None):
-        '''
-        Adds an attribute with specified key and value to self.obj_info. If obj_id is specified,
-            it will update the obj dictionary, otherwise it adds a new obj to the dic
-        Warning: May override existing information
-
-        Args:
-            attribute_key (str): key in object dictionary
-            attribute_val (any): value in object dictionary
-            optional:
-                obj_id (int): ID of the object's dictionary to update with the new attribute
-
-        '''
-        attribute_dic = {attribute_key: attribute_val}
-        if not obj_id:
-            self.add_obj(attribute_dic)
-        else:
-            self.update_obj_info(obj_id, attribute_dic)
-
-    def add_pcd(self, pcd, obj_id=None):
-        '''
-        Adds a pointcloud to the object info dictionary with the key 'pcd'. 
-        obj_id is optional if object already exists
-        '''
-        self.add_attribute(self, 'pcd', pcd, obj_id=obj_id)
-
-    def add_segmentation_instance(self, rgb, obj_id=None):
-        '''
-        Adds a list of rgb images to the object info dictionary with the key 'rgb'. 
-        obj_id is optional if object already exists
-        '''
-        self.add_attribute(self, 'rgb', rgb, obj_id=obj_id)
-
+    def clear_obj_info(self):
+        self.ranked_objs = {}     
+        self.robot.state = -1

@@ -1,8 +1,10 @@
 import os, os.path as osp
 import numpy as np
-import torch
+# import torch
 import copy
 
+import sys
+sys.path.append(os.getenv('SOURCE_DIR'))
 from rndf_robot.utils import util, path_util
 from rndf_robot.utils.pipeline_util import (
     process_xq_data,
@@ -42,7 +44,7 @@ DOCSTRINGS = {
                             new_position (Array-like, length 3): Final position of the EE, after performing the move action.
                                 If grasp fails, returns None
                     ''',
-                'place': 
+                'place_position': 
                     '''
                         Skill to place an object conditioned on its pointcloud, its object class, and 
                             a certain geometric feature to place at. Skill is executed
@@ -138,8 +140,8 @@ class NDFLibrary:
         self.inital_poses = {}
 
         #{action: {param1: set(), param2: set()}}
-        self.FUNCTIONS = {'grasp': self.grasp, 'place': self.place, 'place_relative': self.place_relative, 'find': self.find}
-        self.FUNCTION_PARAMS = {'grasp': ('obj_class', 'geometry'), 'place': ('obj_class', 'geometry'), 'place_relative': ('obj_class', 'geometry')}
+        self.FUNCTIONS = {'grasp': self.grasp, 'place_position': self.place_position, 'place_relative': self.place_relative, 'find': self.find}
+        self.FUNCTION_PARAMS = {'grasp': ('obj_class', 'geometry'), 'place_position': ('obj_class', 'geometry'), 'place_relative': ('obj_class', 'geometry')}
 
 
     def load_default_demos(self):
@@ -172,6 +174,15 @@ class NDFLibrary:
                     raise NotImplementedError("Unsure how to store these demos")
                 
         return demo_dic
+    
+    def add_demo_dir(self, skill_name, demo_dir_path):
+        demos = []
+        for demo_npz in os.listdir(demo_dir_path):
+            if not demo_npz.endswith('npz'): continue
+            demo_path = osp.join(demo_dir_path, demo_npz)
+            demos.append(demo_path)
+        if not demos and skill_name not in demo_dir_path:
+            self.default_demos[skill_name] = demos
 
     def get_model_path_for_class(self, obj_class):
         if obj_class in self.default_models:
@@ -295,21 +306,6 @@ class NDFLibrary:
     ###########################################################################################################
     # Primitives
 
-    def find(self, language_description, n=None):
-        '''
-        Skill to find pointclouds of object instances that match a language description
-
-        Args:
-            language_description (str): English language description of object to find
-                n (optional int): Number of instances of the object to find
-        
-        Return:
-            list of tuples (confidence score, pointcloud) of length n that match the language 
-                description of the object to find. If n isn't specified, return all that match above
-                a threshold.
-        '''
-        pass
-
     def grasp(self, target_pcd, obj_class, geometry):
         '''
         Skill to grasp an object conditioned on its pointcloud, its object class and 
@@ -385,7 +381,7 @@ class NDFLibrary:
         # pre_ee_end_pose1 = util.transform_pose(pose_source=pre_ee_end_pose2, pose_transform=offset_tf2) 
         return [pre_ee_end_pose1, pre_ee_end_pose2]
     
-    def place(self, target_pcd, obj_class, geometry, ee_pose):        
+    def place_position(self, target_pcd, obj_class, geometry, position, ee_pose):        
         '''
         Skill to place an object conditioned on its pointcloud, its object class, and 
             a certain geometric feature to place at. Skill is executed
@@ -394,8 +390,9 @@ class NDFLibrary:
             target_pcd (np.ndarray): N x 3 array representing the 3D point cloud of the 
                 target object to be placed, expressed in the world coordinate system
             obj_class (str): Class of the object to be placed. Must be in self.obj_classes 
-            geometry (str): Description of a geometric feature on the scene to execute place upon
+            geometry (str): Description of a geometric feature of object that is placed on
                 ex. "shelf" on the table
+            position (3x1np.array): 3D position of where object should be placed
             ee_pose (Array-like, length 3): Last pose of the EE
         
         Return:
@@ -413,7 +410,14 @@ class NDFLibrary:
         pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=False, opt_visualize=True,)
         # pose_mats, best_idx, losses = optimizer.optimize_transform_implicit(target_pcd, ee=False, opt_visualize=True, return_score_list=True)
         corresponding_pose = util.pose_from_matrix(pose_mats[best_idx])
-        corresponding_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=corresponding_pose)
+
+        placement_pose = util.list2pose_stamped([position[0], position[1], position[2], 0, 0, 0, 1])
+        placement2target_feat_pose_mat = np.linalg.inv(pose_mats[best_idx])
+        target_pose_mat = np.matmul(placement2target_feat_pose_mat, util.matrix_from_pose(placement_pose))
+        transformed_target_pose_mat = np.matmul(placement_pose, target_pose_mat)
+        transformed_target_pose = util.pose_from_matrix(transformed_target_pose_mat)
+
+        corresponding_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=transformed_target_pose)
         ee_poses = [*self.get_place_pre_poses(corresponding_pose), corresponding_pose]
         return [util.pose_stamped2list(pose) for pose in ee_poses]
     
@@ -479,12 +483,14 @@ class NDFLibrary:
         return [pre_ee_end_pose1, pre_ee_end_pose2]
         # return [pre_ee_end_pose2]
     
-    def learn_skill(self, skill_name, target_pcd, obj_class):
+    def learn_skill(self, skill_name, target_pcd, obj_class, **kwargs):
         '''
         Skill to learn a new skill from a human demonstration
 
         Args:
-            skill_name (str): Short name for the skill to be learned
+            skill_name (str): Short name for the skill to be learned ideally in the form 
+            'action [obj class]_[obj geometry]' where action is in {grasp, place} and geometry 
+            is any additional description of the skill
             target (np.ndarray, str): (pcd, obj_class) N x 3 array representing the 3D point cloud of 
                 the target object that the new skill is executed on, expressed in the world coordinate 
                 system
@@ -494,7 +500,49 @@ class NDFLibrary:
             the function skill_name that can perform the skill given by "skil_name" and takes as input
                 the mentioned parameters. This skill is added permanently to skill library.
         '''
-        pass
+        skill_type = None
+        if 'grasp' in skill_name:
+            skill_type = 'grasp'
+        elif 'relational_pcd' in kwargs:
+            skill_type = 'place_relative'
+        elif 'position' in kwargs:
+            skill_type = 'place_position'
+        else:
+            raise NotImplementedError(f'Unsure what skill type {skill_name} is')
+        
+        while True:
+            i = input(
+                '''How to learn a new skill
+                    [p]: Get demos from path
+                    [r]: Record a demo live
+                    [b]: Exit - Fail to learn a skill
+                ''')
+            if i == 'p':
+                demo_dir_path = input('Please enter the path to the directory')
+                break
+            elif i == 'r':
+                raise NotImplementedError('Recording a new demo live has not been implemented')
+            elif i == 'b':
+                return 
+        
+        if not osp.exists(demo_dir_path):
+            log_warn(f'{demo_dir_path} path does not exist, failed to create skill')
+            return
+        
+        self.add_demo_dir(skill_name, demo_dir_path)
+        geometry = skill_name.split('_')[-1]
+        self.ndf_primitives[skill_type]['obj_classes'].add(obj_class)
+        self.ndf_primitives[skill_type]['geometry'].add((obj_class, geometry))
+        
+        skill_func = self.ndf_primitives[skill_type]
+        if skill_type == 'grasp':
+            return skill_func(target_pcd, obj_class, geometry)
+        elif skill_type == 'place_relative':
+            return skill_func((target_pcd, obj_class), kwargs['relational'], geometry, kwargs['ee_pose'])
+        elif skill_type == 'place_position':
+            return skill_func((target_pcd, obj_class), geometry, kwargs['position'], kwargs['ee_pose'])
+        else:
+            raise NotImplementedError('This skill type does not exist, learning failed')
 
 ###########################################################################################################
 # RNDF Descriptor Creation
@@ -601,4 +649,6 @@ def get_rndf_desc_subdir(demo_path, parent_model_path, child_model_path):
     return dirname
 
 if __name__ == "__main__":
-    pass
+    path = osp.join(path_util.get_rndf_demos())
+    library = NDFLibrary(None, None, None, path_util.get_rndf_demos())
+    library.learn_skill('grasp mug_body', None, 'mug')

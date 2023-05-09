@@ -122,7 +122,7 @@ class Robot:
         self.last_ee_pose = ee_poses[-1]
         return self.last_ee_pose
     
-    def place(self, target, geometry):
+    def place_position(self, target, geometry, position):
         '''
         Skill to place an object conditioned on its pointcloud, its object class, and 
             a certain geometric feature to place at. Skill is executed
@@ -144,7 +144,7 @@ class Robot:
 
         if self.last_ee_pose is None:
             self.last_ee_pose = self.get_ee_pose()
-        ee_poses = self.skill_library.place(target_pcd, target_class, geometry, self.last_ee_pose)
+        ee_poses = self.skill_library.place_position(target_pcd, target_class, geometry, position, self.last_ee_pose)
         self.execute(ee_poses)
         # self.last_ee_pose = ee_poses[-1] if sucess else None
         return self.last_ee_pose
@@ -175,4 +175,15 @@ class Robot:
             return
         self.execute(ee_poses)
         # self.last_ee_pose = ee_poses[-1] if sucess else None
+        return self.last_ee_pose
+
+    def learned_skill(self, skill_name, target, **kwargs):
+        target_pcd, target_class = target
+        if self.last_ee_pose is None:
+            self.last_ee_pose = self.get_ee_pose()
+        kwargs['ee_pose'] = self.last_ee_pose
+        ee_poses = self.skill_library.learn_skill(skill_name, target_pcd, target_class, kwargs)
+        if ee_poses is None:
+            return
+        self.execute(ee_poses)
         return self.last_ee_pose

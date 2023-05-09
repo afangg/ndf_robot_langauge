@@ -161,8 +161,6 @@ class RealRobot(Robot):
             return
         
         for jnt_pose in jnt_poses:
-            # input('Press enter to show next plan')
-            # if not execute:
             if start_pose is None:
                 resulting_traj = self.planning.plan_joint_target(joint_position_desired=jnt_pose, 
                             from_current=True, 
@@ -179,7 +177,6 @@ class RealRobot(Robot):
             if resulting_traj is None:
                 break
             else:
-                # joint_traj += resulting_traj
                 joint_traj.append(resulting_traj)
         else:
             self.execution_prompt(joint_traj)
