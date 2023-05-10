@@ -12,7 +12,7 @@ from rndf_robot.segmentation.VisionModule import VisionModule
 from rndf_robot.cameras.CameraSys import CameraSys
 
 from rndf_robot.robot.SimRobot import SimRobot
-from rndf_robot.robot.RealRobot import RealRobot
+#from rndf_robot.robot.RealRobot import RealRobot
 
 from rndf_robot.descriptions.ObjectData import OBJECT_CLASSES
 from airobot import log_debug, log_warn, log_info
@@ -46,7 +46,7 @@ class Pipeline:
             raise NotImplementedError('Not sure what env type this is')
 
         self.system_env.set_robot(self.robot)
-        camera_sys = CameraSys(args, self.mc_vis, self.system_env.cfg, sim_robot)
+        camera_sys = CameraSys(args, self.mc_vis, self.system_env.cfg, sim_robot, table_id=self.robot.table_id)
         self.vision_mod = VisionModule(args.seg_method, self.mc_vis)    
         self.vision_mod.initialize_cameras(camera_sys)
 
@@ -219,7 +219,7 @@ def run(FUNCTIONS):
     pcd_class_pairs = zip(pcds, obj_classes)
 
     if action == 'place':
-        skill_func(*pcd_class_pairs, geometry, np.array([0.2, -0.2, 0]))
+        skill_func(*pcd_class_pairs, geometry, np.array([0.2, -0.2, 1]))
     else:
         skill_func(*pcd_class_pairs, geometry)
     gc.collect()

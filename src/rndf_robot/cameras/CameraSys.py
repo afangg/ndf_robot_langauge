@@ -14,7 +14,7 @@ from airobot import Robot, log_warn
 from IPython import embed
 class CameraSys:
 
-    def __init__(self, args, mc_vis, cfg, sim_robot=None) -> None:
+    def __init__(self, args, mc_vis, cfg, sim_robot=None, table_id=None) -> None:
         self.args = args
         self.mc_vis = mc_vis
         self.cfg = cfg
@@ -24,6 +24,7 @@ class CameraSys:
                 return
             else:
                 self.sim_robot = sim_robot
+                self.table_id = table_id
         self.setup_cams()
 
     def setup_cams(self):
@@ -75,7 +76,7 @@ class CameraSys:
         cam_interface = RealsenseLocal()
         return cams, pipelines, cam_interface
     
-    def get_pb_seg(self, obj_id_to_class, table_id=None, crop_show=True):
+    def get_pb_seg(self, obj_id_to_class, crop_show=True):
         '''
         obj_id_to_class (dic): {obj_id: obj_class}
 
@@ -84,8 +85,7 @@ class CameraSys:
 
         pc_obs_info = {}
         for obj_id in obj_id_to_class:
-            pc_obs_info[obj_id] = {'pcd': [], 'rbgs': []}
-
+            pc_obs_info[obj_id] = {'pcd': [], 'rgbs': []}
         all_table_pts = []
         for i, cam in enumerate(self.cams.cams): 
             # get image and raw point cloud
@@ -101,8 +101,8 @@ class CameraSys:
                 pc_obs_info[obj_id]['pcd'].append(obj_pts)
                 pc_obs_info[obj_id]['rgbs'].append(rgb.flatten()[obj_inds])
 
-            if table_id:
-                table_inds = np.where(flat_seg == table_id)                
+            if self.table_id is not None:
+                table_inds = np.where(flat_seg == self.table_id)                
                 table_pts = pts_raw[table_inds[0], :]
                 all_table_pts.append(table_pts)
 
@@ -123,13 +123,12 @@ class CameraSys:
                 log_warn(f'WARNING: COULD NOT FIND {obj_id} OBJ')
                 continue
 
-            clip_embeddings = None
             obj_class = obj_id_to_class[obj_id]
             util.meshcat_pcd_show(self.mc_vis, target_obj_pcd_obs, color=(255, 0, 0), name=f'scene/{obj_class}_{obj_id}')
 
             if obj_class not in pcds_output:
                 pcds_output[obj_class] = []
-            pcds_output[obj_class].append((1.0, target_obj_pcd_obs, obj_id, clip_embeddings))
+            pcds_output[obj_class].append((1.0, target_obj_pcd_obs, obj_id))
         return pcds_output
     
     def get_all_real_views(self, crop_show=True):

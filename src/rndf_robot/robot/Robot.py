@@ -11,6 +11,7 @@ class Robot:
         self.skill_library = skill_library
         self.mc_vis = mc_vis
         self.cfg = cfg
+        self.table_id = None
 
         if self.args.gripper_type == 'panda':
             self.ee_file = osp.join(path_util.get_rndf_descriptions(), 'franka_panda/meshes/panda_hand_full.obj')

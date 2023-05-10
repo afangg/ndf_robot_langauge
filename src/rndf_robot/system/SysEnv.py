@@ -3,7 +3,7 @@ import torch
 import random
 
 from rndf_robot.robot.Robot import Robot
-from rndf_robot.robot.RealRobot import RealRobot
+#from rndf_robot.robot.RealRobot import RealRobot
 from rndf_robot.robot.SimRobot import SimRobot
 
 from rndf_robot.descriptions.ObjectData import ObjectData, OBJECT_CLASSES
@@ -56,7 +56,6 @@ class Environment:
         # pick the pcd with the highest score
         for label in labels_to_pcds:
             labels_to_pcds[label].sort(key=lambda x: x[0])
-
         for obj_rank in self.ranked_objs:
             # if we decide to not re-segment, must exclude alreadu assign pcds
             if not re_seg and 'pcd' in self.ranked_objs[obj_rank]: continue
