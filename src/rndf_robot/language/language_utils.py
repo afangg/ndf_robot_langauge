@@ -60,8 +60,6 @@ def create_keyword_dic(relevant_objs, sentence_dic):
     '''
     keywords = []
     verb_flag = False
-    from IPython import embed
-    embed()
     for phrase, label in sentence_dic.items():
         if label == 'NP': #noun phrase
             for obj in relevant_objs:

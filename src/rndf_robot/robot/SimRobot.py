@@ -240,7 +240,7 @@ class SimRobot(RobotParent):
             util.meshcat_obj_show(self.mc_vis, self.ee_file, pose, 1.0, name=f'ee/ee_{i}')
 
         jnt_poses = []
-        for pose in ee_pose:
+        for pose in ee_poses:
             jnt_pose = self.cascade_ik(pose, place=place)
             if jnt_pose is None:
                 log_warn('Could not find IKs therefore stopping motion plan')

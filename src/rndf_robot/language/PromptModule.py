@@ -16,7 +16,7 @@ class PromptModule:
         log_debug('All demo labels: %s' %self.skill_names)
         while True:
             query = self.ask_query()
-            # query = "place_relative mug_in tray", "move mug to the tray upside down"
+            # query = "place bowl_bottom", "put the bowl down"
             if not query: return
             best_skill, query_text = query
             break

@@ -144,6 +144,7 @@ class NDFLibrary:
         #{action: {param1: set(), param2: set()}}
         self.FUNCTIONS = {'grasp': self.grasp, 'place_position': self.place_position, 'place_relative': self.place_relative}
         self.FUNCTION_PARAMS = {'grasp': ('obj_class', 'geometry'), 'place_position': ('obj_class', 'geometry'), 'place_relative': ('obj_class', 'geometry')}
+        self.PRIMITIVE_TO_
 
 
     def load_default_demos(self):
@@ -173,7 +174,8 @@ class NDFLibrary:
                     self.ndf_primitives[verb]['obj_classes'].add(obj_class)
                     self.ndf_primitives[verb]['geometry'].add((obj_class, geometry))
                 else:
-                    raise NotImplementedError("Unsure how to store these demos")
+                    log_debug("Unsure how to store these demos")
+                    continue
                 
         return demo_dic
     
@@ -417,14 +419,26 @@ class NDFLibrary:
 
         placement_pose = util.list2pose_stamped([position[0], position[1], position[2], 0, 0, 0, 1])
         placement_pose_mat = util.matrix_from_pose(placement_pose)
+        util.meshcat_frame_show(self.mc_vis, 'scene/placement_pose', placement_pose_mat)
 
-        transformed_pts = util.transform_pcd(demo_dic['query_pts'], placement_pose_mat) 
 
-        util.meshcat_pcd_show(self.mc_vis, demo_dic['query_pts'], name='original_qps')  
-        util.meshcat_pcd_show(self.mc_vis, transformed_pts, name='transformed_qps')  
-        
+        qp_centroid = np.mean(demo_dic['query_pts'], axis=0)
+        qp_pose = np.zeros(7)
+        qp_pose[:3] = qp_centroid
+        qp_pose[-1] = 1
+        qp_pose = util.list2pose_stamped(qp_pose)
+
+        origin2qp_mat = util.matrix_from_pose(qp_pose)
+
+        qp_origin = util.transform_pcd(demo_dic['query_pts'], np.linalg.inv(origin2qp_mat)) 
+        qp_placement = util.transform_pcd(qp_origin, placement_pose_mat) 
+
+        # util.meshcat_pcd_show(self.mc_vis, demo_dic['query_pts'], name='optimizer/original_qps')  
+        # util.meshcat_pcd_show(self.mc_vis, qp_origin, name='optimizer/origin_qps')  
+        # util.meshcat_pcd_show(self.mc_vis, qp_placement, name='optimizer/placement_qps')  
+
         optimizer = self.get_optimizer(obj_class, demo_dic['query_pts'])
-        optimizer.set_query_points(transformed_pts)
+        optimizer.set_query_points(qp_placement)
         optimizer.set_demo_info(demo_dic['demo_info'])
         
         pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=False, opt_visualize=True,)
@@ -436,19 +450,9 @@ class NDFLibrary:
         origin2desc_pose_mat = np.matmul(place2desc_pose_mat, origin2placement)
         origin2placement_again = np.matmul(desc2place_pose_mat, origin2desc_pose_mat)
 
-        util.meshcat_frame_show(self.mc_vis, 'scene/placement_pose', origin2placement)
         util.meshcat_frame_show(self.mc_vis, 'scene/obj_feat_pose', origin2desc_pose_mat)
         util.meshcat_frame_show(self.mc_vis, 'scene/transformed_target_pose', origin2placement_again)
 
-
-
-
-        # desc2origin_pose_mat = pose_mats[best_idx]
-        # origin2desc_pose_mat = np.linalg.inv(desc2origin_pose_mat)
-        # origin2placement = placement_pose_mat
-        # desc2placement_pose_mat = np.matmul(desc2origin_pose_mat, origin2placement)
-        # transformed_target_pose_mat = np.matmul(desc2placement_pose_mat, target_pose_mat)
-        # origin2desc
         corresponding_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=corresponding_pose)
         self.show_ee(corresponding_pose)
 
