@@ -21,7 +21,7 @@ from IPython import embed
 
 config = dict(
     # objects={'mug': {(1,0,0.1,1):1, (0,0.5,0.8,1):1}}
-    objects = {'mug': {(0,1,0.1,1):1}, 'container': {(0,0.5,0.8,1):1}}
+    objects = {'bowl': {(0,1,0.1,1):1}, 'container': {(0,0.5,0.8,1):1}}
 )
 class Pipeline:
 
@@ -31,7 +31,7 @@ class Pipeline:
         self.obj_classes = list(OBJECT_CLASSES.keys())
         obj_models = {obj_class: OBJECT_CLASSES[obj_class]['model_weights'] for obj_class in self.obj_classes}
 
-        folder = 'release_demos' if args.env_type == 'sim' else 'real_release_demos'
+        folder = 'real_release_demos' if args.env_type == 'sim' else 'real_release_demos'
         self.system_env = Environment(args, self.mc_vis, scene_objs=config)
         self.ndf_lib = NDFLibrary(args, self.mc_vis, self.system_env.cfg, folder, 
                                   obj_classes=self.obj_classes, obj_models=obj_models)
