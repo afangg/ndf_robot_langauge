@@ -45,9 +45,10 @@ def process_place_data(demo_data, query_pts):
             as input to ensure it's the same as the point set used
             by the optimization at test time)
     """
-    grasp_ee_pose = util.list2pose_stamped(demo_data['start_ee_pose_world'])
-    place_ee_pose = util.list2pose_stamped(demo_data['end_ee_pose_world'])
-    relative_pose_mat = util.matrix_from_pose(util.get_transform(place_ee_pose, grasp_ee_pose))
+    # grasp_ee_pose = util.list2pose_stamped(demo_data['start_ee_pose_world'])
+    # place_ee_pose = util.list2pose_stamped(demo_data['end_ee_pose_world'])
+    # relative_pose_mat = util.matrix_from_pose(util.get_transform(place_ee_pose, grasp_ee_pose))
+    relative_pose_mat = util.matrix_from_pose(util.list2pose_stamped(demo_data['obj_pose_world']))
     demo_obj_pts = demo_data['object_pointcloud']
     demo_obj_pts = util.transform_pcd(demo_obj_pts, relative_pose_mat)
     demo_query_pts = copy.deepcopy(query_pts)

@@ -68,6 +68,17 @@ class OWLViTDetect:
 
         return out_boxes, out_scores
     
+    def show_owl(self, image, captions_to_bboxes, bbox_scores):
+      pil_image = Image.fromarray(np.uint8(image))
+      for label, bboxes in captions_to_bboxes.items():
+          for i in range(len(bboxes)):
+              box, score = bboxes[i], bbox_scores[label][i]
+              xmin,ymin,xmax,ymax = box
+              score = score[0]
+              draw_bounding_box_on_image(pil_image, ymin, xmin, ymax, xmax, display_str_list=[f"{label}: {score}"], use_normalized_coordinates=False)
+      plt.imshow(pil_image)
+      plt.show()
+
 def draw_bounding_box_on_image(image,
                                ymin,
                                xmin,

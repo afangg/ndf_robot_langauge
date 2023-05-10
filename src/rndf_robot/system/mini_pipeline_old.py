@@ -6,6 +6,7 @@ import random
 import numpy as np
 
 from rndf_robot.system.SysEnv import Environment
+from rndf_robot.robot.Robot import Robot
 from rndf_robot.data.NDFLibrary import NDFLibrary
 from rndf_robot.language.PromptModule import PromptModule
 from rndf_robot.segmentation.VisionModule import VisionModule
@@ -28,7 +29,7 @@ class Pipeline:
     def __init__(self, args):
         self.mc_vis = meshcat.Visualizer(zmq_url=f'tcp://127.0.0.1:{args.port_vis}')
         self.args = args
-        self.obj_classes = list(OBJECT_CLASSES.keys())
+        obj_classes = list(OBJECT_CLASSES.keys())
         obj_models = {obj_class: OBJECT_CLASSES[obj_class]['model_weights'] for obj_class in obj_classes}
 
         folder = 'release_demos' if args.env_type == 'sim' else 'real_release_demos'
@@ -50,7 +51,7 @@ class Pipeline:
         self.vision_mod.initialize_cameras(camera_sys)
 
         skill_names = list(self.ndf_lib.default_demos.keys())
-        self.prompter = PromptModule(skill_names, self.obj_classes)
+        self.prompter = PromptModule(skill_names, obj_classes)
 
         # primitive_template = self.robot.skill_library.get_primitive_templates()
         # print(primitive_template)
@@ -77,9 +78,9 @@ class Pipeline:
         obj_desc = [keyword[1] if keyword[1] else keyword[0] for keyword in keywords]
         return action, self.system_env.get_relevant_classes(), geometry, obj_desc
     
-    def run_segmentation(self):
+    def find(self, obj_desc):
         if self.args.env_type == 'real':
-            labels = self.obj_classes
+            labels = obj_desc
         elif self.args.env_type == 'sim':
             labels = {}
             for obj_id, info in self.system_env.obj_info.items():
@@ -88,28 +89,7 @@ class Pipeline:
         labels_to_pcds = self.vision_mod.segment_all_scenes(labels)
             
         if not labels_to_pcds:
-            log_warn('WARNING: No objects detected, try again')
-            return
-        self.system_env.intake_segmentation(labels_to_pcds)
-
-    def find(self, obj_desc=None):
-        if self.args.env_type == 'real':
-            if obj_desc is not None:
-                labels = obj_desc
-            else:
-                labels = self.obj_classes
-        elif self.args.env_type == 'sim':
-            labels = {}
-            for obj_id, info in self.system_env.obj_info.items():
-                labels[obj_id] = info['class']
-        
-        labels_to_pcds = self.vision_mod.segment_all_scenes(labels)
-            
-        if not labels_to_pcds:
-            log_warn('WARNING: No objects detected, try again')
-            return False, None
-        elif obj_desc and len(labels_to_pcds) != len(labels):
-            log_warn('WARNING: Not all necessary objects found')
+            log_warn('WARNING: Target object not detected, try again')
             return False, None
         
         if self.args.seg_method != 'pb_seg':
@@ -130,60 +110,10 @@ class Pipeline:
                           'grasp': self.robot.grasp, 
                           'place': self.robot.place, 
                           'place_relative': self.robot.place_relative,}
-        self.next_iter()
+        self.system_env.next_iter()
         while True:
             run(self.FUNCTIONS)
-            self.next_iter()
-
-    def next_iter(self):
-        while True:
-            i = input(
-                '''What should we do
-                    [n]: Continue to next iteration
-                    [f]: Find all the objects and segment the scene
-                    [h]: Move to home
-                    [o]: Open gripper
-                    [c]: Close gripper
-                    [g]: *SIM ONLY* - generate a new random scene from configs
-                    [i]: *REAL ONLY* - to set into low stiffness mode
-                    [l]: *REAL ONLY* - to lock into current configuration with high stiffness
-                    [em]: Launch interactive mode
-                    [clear]: Clears the env variables - will segment everything again
-                ''')
-            
-            if i == 'h':
-                self.robot.go_home()
-                continue
-            elif i == 'o':
-                self.robot.gripper_state(open=True)
-            elif i == 'c':
-                self.robot.gripper_state(open=False)
-            elif i == 'n':
-                self.mc_vis['scene'].delete()
-                self.mc_vis['optimizer'].delete()
-                self.mc_vis['ee'].delete()
-                break
-            elif i == 'f':
-                self.run_segmentation()
-                break
-            elif i == 'g':
-                self.system_env.delete_sim_scene()
-                continue
-            elif i == 'i':
-                self.robot.gravity_comp(on=True)
-                continue
-            elif i == 'l':
-                self.robot.gravity_comp(on=False)
-                continue
-            elif i =='em':
-                embed()
-            elif i == 'clear':
-                self.system_env.clear_obj_info(self)
-                continue
-            else:
-                print('Unknown command')
-                continue
-        torch.cuda.empty_cache()
+            self.system_env.next_iter()
 
 def run(FUNCTIONS):
     with torch.no_grad():

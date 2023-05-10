@@ -115,6 +115,20 @@ def process_demo_data(data, initial_pose=None, table_obj=None):
 
     return demo_info, initial_pose
 
+def process_grasp(data, table_obj=None):
+    initial_pose = None
+    query_pts, query_pts_viz = extract_grasp_query_points(data)
+    demo_info = process_grasp_data(data, query_pts)
+    return demo_info, query_pts, query_pts_viz
+
+def process_place(data, table_obj=None):
+    query_pts_type = None
+    if not table_obj:
+        query_pts_type = 'custom'
+    query_pts, query_pts_viz = extract_place_query_points(data, query_pts_type=query_pts_type, placement_surface=table_obj)
+    demo_info = process_place_data(data, query_pts)
+    return demo_info, query_pts, query_pts_viz
+
 def grasp_demo(data):
     demo_obj_pts = data['object_pointcloud']  # observed shape point cloud at start
     demo_pts_mean = np.mean(demo_obj_pts, axis=0)

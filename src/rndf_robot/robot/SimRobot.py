@@ -239,13 +239,16 @@ class SimRobot(RobotParent):
             pose = util.matrix_from_pose(pose)
             util.meshcat_obj_show(self.mc_vis, self.ee_file, pose, 1.0, name=f'ee/ee_{i}')
 
-        jnt_poses = [self.cascade_ik(pose, place=place) for pose in ee_poses]
+        jnt_poses = []
+        for pose in ee_pose:
+            jnt_pose = self.cascade_ik(pose, place=place)
+            if jnt_pose is None:
+                log_warn('Could not find IKs therefore stopping motion plan')
+                return
+            jnt_poses.append(jnt_pose)
+
         prev_pos = self.get_jpos()
         for i, jnt_pos in enumerate(jnt_poses):
-            if jnt_pos is None:
-                log_warn('No IK for jnt', i)
-                break
-            
             plan = self.ik_helper.plan_joint_motion(prev_pos, jnt_pos)
             if plan is None:
                 log_warn('FAILED TO FIND A PLAN. STOPPING')

@@ -16,7 +16,7 @@ class VisionModule:
         self.seg_method = seg_method
 
         self.mc_vis = mc_vis
-        self.seg = SAMSeg()
+        self.seg = SAMSeg(cuda=True)
 
         if seg_method == 'owl':
             from .OWLViT import OWLViTDetect
@@ -35,7 +35,7 @@ class VisionModule:
         assert self.seg_method == 'pb_seg', 'Seg method does not use PyBullet'
         return self.camera_sys.get_pb_seg(obj_id_to_class)
     
-    def language_seg(self, captions, centroid_thresh=0.15, detect_thresh=0.4):
+    def language_seg(self, captions, centroid_thresh=0.1, detect_thresh=0.2):
         '''
         captions (list of strings)
         return: {obj_class: [(score, pcd, obj_id, clip embedding)]}
@@ -73,9 +73,10 @@ class VisionModule:
                 detector_bboxes, detector_scores = self.obj_detector.detect_captions(
                                                         rgb, 
                                                         captions, 
-                                                        top=1, 
+                                                        top=None, 
                                                         score_threshold=detect_thresh)
                 log_debug(f'Detected the following captions {detector_scores.keys()}')
+                self.obj_detector.show_owl(rgb, detector_bboxes, detector_scores)
                 if not detector_bboxes:
                     continue
                 for caption, bboxes in detector_bboxes.items():

@@ -1,6 +1,6 @@
 import os, os.path as osp
 import numpy as np
-# import torch
+import torch
 import copy
 
 import sys
@@ -11,7 +11,9 @@ from rndf_robot.utils.pipeline_util import (
     process_xq_rs_data,
     process_demo_data,
     post_process_grasp_point,
-    get_ee_offset
+    get_ee_offset,
+    process_grasp,
+    process_place
 )
 
 from rndf_robot.opt.optimizer import OccNetOptimizer
@@ -140,7 +142,7 @@ class NDFLibrary:
         self.inital_poses = {}
 
         #{action: {param1: set(), param2: set()}}
-        self.FUNCTIONS = {'grasp': self.grasp, 'place_position': self.place_position, 'place_relative': self.place_relative, 'find': self.find}
+        self.FUNCTIONS = {'grasp': self.grasp, 'place_position': self.place_position, 'place_relative': self.place_relative}
         self.FUNCTION_PARAMS = {'grasp': ('obj_class', 'geometry'), 'place_position': ('obj_class', 'geometry'), 'place_relative': ('obj_class', 'geometry')}
 
 
@@ -211,13 +213,21 @@ class NDFLibrary:
             if 'shapenet_id' in demo:
                 obj_id = demo['shapenet_id'].item()
 
+            # if demo_name.startswith('grasp'):
+            #     target_info, initial_pose = process_demo_data(demo, initial_pose = None, table_obj=table_obj)
+            #     demo_dic['demo_start_poses'].append(initial_pose)
+            # elif demo_name.startswith('place'):
+            #     grasp_pose = util.pose_stamped2list(util.unit_pose())
+            #     grasp_pose = None
+            #     target_info, _ = process_demo_data(demo, grasp_pose, table_obj=table_obj)
+            #     if not target_info: continue
+            # else:
+            #     raise NotImplementedError("Unsure how to read these demos")
+        
             if demo_name.startswith('grasp'):
-                target_info, initial_pose = process_demo_data(demo, initial_pose = None, table_obj=table_obj)
-                demo_dic['demo_start_poses'].append(initial_pose)
+                target_info, query_pts, query_pts_viz = process_grasp(demo)
             elif demo_name.startswith('place'):
-                grasp_pose = util.pose_stamped2list(util.unit_pose())
-                grasp_pose = None
-                target_info, _ = process_demo_data(demo, grasp_pose, table_obj=table_obj)
+                target_info, query_pts, query_pts_viz = process_place(demo, table_obj=table_obj)
                 if not target_info: continue
             else:
                 raise NotImplementedError("Unsure how to read these demos")
@@ -228,9 +238,11 @@ class NDFLibrary:
                     demo_dic['demo_ids'].append(obj_id)
             else:
                 log_debug('Could not load demo')
-        
-        demo_dic['query_pts'] = process_xq_data(demo, table_obj=table_obj)
-        demo_dic['query_pts_rs'] = process_xq_rs_data(demo, table_obj=table_obj)
+
+        demo_dic['query_pts'] = query_pts
+        demo_dic['query_pts_rs'] = query_pts_viz
+        # demo_dic['query_pts'] = process_xq_data(demo, table_obj=table_obj)
+        # demo_dic['query_pts_rs'] = process_xq_rs_data(demo, table_obj=table_obj)
         demo_dic['demo_ids'] = frozenset(demo_dic['demo_ids'])
 
         log_debug('Finished loading single descriptors')
@@ -399,28 +411,48 @@ class NDFLibrary:
             list of ee poses to move to
         '''
         assert obj_class in self.obj_classes, "Object class doesn't have skills"
-        assert self.inital_poses, "Need to load the grasp demo first"
         
         demo_name = f'place {obj_class}_{geometry}'
         demo_dic = self.get_ndf_demo_info(demo_name, geometry)
 
+        placement_pose = util.list2pose_stamped([position[0], position[1], position[2], 0, 0, 0, 1])
+        placement_pose_mat = util.matrix_from_pose(placement_pose)
+
+        util.meshcat_frame_show(self.mc_vis, 'scene/place_pose', placement_pose_mat)    
+    
         optimizer = self.get_optimizer(obj_class, demo_dic['query_pts'])
         optimizer.set_demo_info(demo_dic['demo_info'])
+
+        ee2place = util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=placement_pose)
         
         pose_mats, best_idx = optimizer.optimize_transform_implicit(target_pcd, ee=False, opt_visualize=True,)
         # pose_mats, best_idx, losses = optimizer.optimize_transform_implicit(target_pcd, ee=False, opt_visualize=True, return_score_list=True)
         corresponding_pose = util.pose_from_matrix(pose_mats[best_idx])
+        
+        
+        pTd = util.get_transform(placement_pose, corresponding_pose)
 
-        placement_pose = util.list2pose_stamped([position[0], position[1], position[2], 0, 0, 0, 1])
-        placement2target_feat_pose_mat = np.linalg.inv(pose_mats[best_idx])
-        target_pose_mat = np.matmul(placement2target_feat_pose_mat, util.matrix_from_pose(placement_pose))
-        transformed_target_pose_mat = np.matmul(placement_pose, target_pose_mat)
-        transformed_target_pose = util.pose_from_matrix(transformed_target_pose_mat)
 
-        corresponding_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=transformed_target_pose)
+        
+        query_pts2placement = util.get_transform(corresponding_pose, placement_pose)
+        # placement2target_feat_pose_mat = np.linalg.inv(pose_mats[best_idx])
+        # target_pose_mat = np.matmul(placement2target_feat_pose_mat, placement_pose_mat)
+        # transformed_target_pose_mat = np.matmul(placement_pose_mat, target_pose_mat)
+        # transformed_target_pose = util.pose_from_matrix(transformed_target_pose_mat)
+
+        corresponding_pose = util.transform_pose(pose_source=util.list2pose_stamped(ee_pose), pose_transform=corresponding_pose)
+        self.show_ee(corresponding_pose)
+
         ee_poses = [*self.get_place_pre_poses(corresponding_pose), corresponding_pose]
         return [util.pose_stamped2list(pose) for pose in ee_poses]
-    
+
+    def show_ee(self, final_pose):
+        ee_file = osp.join(path_util.get_rndf_descriptions(), 'franka_panda/meshes/robotiq_2f140/full_hand_2f140.obj')
+        final_pose = util.body_world_yaw(final_pose, theta=0)
+        final_pose = util.matrix_from_pose(final_pose)
+        util.meshcat_obj_show(self.mc_vis, ee_file, final_pose, 1.0, name=f'ee/ee_place')
+
+
     def place_relative(self, target, relational, geometry, ee_pose):
         '''
         Skill to place an object relative to another relational object, and a certain geometric feature 
@@ -472,16 +504,16 @@ class NDFLibrary:
 
         free_memory([target_optimizer, rel_optimizer], debug=False)
         return [util.pose_stamped2list(pose) for pose in ee_poses]
-
+    
     def get_place_pre_poses(self, corresponding_pose):
         offset_tf1 = util.list2pose_stamped(self.cfg.PREPLACE_OFFSET_TF)
         # offset_tf1 = util.list2pose_stamped(self.cfg.PREPLACE_VERTICAL_OFFSET_TF)
 
-        offset_tf2 = util.list2pose_stamped(self.cfg.PREPLACE_VERTICAL_OFFSET_TF)
+        # offset_tf2 = util.list2pose_stamped(self.cfg.PREPLACE_VERTICAL_OFFSET_TF)
         pre_ee_end_pose2 = util.transform_pose(pose_source=corresponding_pose, pose_transform=offset_tf1)
-        pre_ee_end_pose1 = util.transform_pose(pose_source=pre_ee_end_pose2, pose_transform=offset_tf2) 
-        return [pre_ee_end_pose1, pre_ee_end_pose2]
-        # return [pre_ee_end_pose2]
+        # pre_ee_end_pose1 = util.transform_pose(pose_source=pre_ee_end_pose2, pose_transform=offset_tf2) 
+        # return [pre_ee_end_pose1, pre_ee_end_pose2]
+        return [pre_ee_end_pose2]
     
     def learn_skill(self, skill_name, target_pcd, obj_class, **kwargs):
         '''
@@ -518,7 +550,7 @@ class NDFLibrary:
                     [b]: Exit - Fail to learn a skill
                 ''')
             if i == 'p':
-                demo_dir_path = input('Please enter the path to the directory')
+                demo_dir_path = input('Please enter the path to the directory\n')
                 break
             elif i == 'r':
                 raise NotImplementedError('Recording a new demo live has not been implemented')
@@ -534,14 +566,21 @@ class NDFLibrary:
         geometry = skill.split('_')[-1]
         self.ndf_primitives[skill_type]['obj_classes'].add(obj_class)
         self.ndf_primitives[skill_type]['geometry'].add((obj_class, geometry))
-        
+
         skill_func = self.ndf_primitives[skill_type]
         if skill_type == 'grasp':
-            return skill_func(target_pcd, obj_class, geometry)
+            def new_grasp(new_target, new_geometry):
+                return skill_func(new_target[0], new_target[1], new_geometry)
+            return skill_func(target_pcd, obj_class, geometry), new_grasp
         elif skill_type == 'place_relative':
-            return skill_func((target_pcd, obj_class), kwargs['relational'], geometry, kwargs['ee_pose'])
+            def new_place_relative(new_target, new_relational, new_geometry):
+                return skill_func(new_target[0], new_target[1], new_relational, new_geometry)
+            return skill_func((target_pcd, obj_class), kwargs['relational'], geometry, kwargs['ee_psoe']), new_place_relative    
         elif skill_type == 'place_position':
-            return skill_func((target_pcd, obj_class), geometry, kwargs['position'], kwargs['ee_pose'])
+            def new_place_position(new_target, new_geometry, new_position):
+                return skill_func(new_target[0], new_target[1], new_position, new_geometry)
+            
+            return skill_func(target_pcd, obj_class, geometry, kwargs['position'], kwargs['ee_pose']), new_place_position
         else:
             raise NotImplementedError('This skill type does not exist, learning failed')
 
@@ -650,6 +689,6 @@ def get_rndf_desc_subdir(demo_path, parent_model_path, child_model_path):
     return dirname
 
 if __name__ == "__main__":
-    path = osp.join(path_util.get_rndf_demos())
-    library = NDFLibrary(None, None, None, path_util.get_rndf_demos())
+    path = osp.join(path_util.get_rndf_demos(), 'real_release_demos')
+    library = NDFLibrary(None, None, None, path)
     library.learn_skill('grasp mug_body', None, 'mug')

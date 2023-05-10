@@ -41,9 +41,13 @@ class Environment:
 
     def assign_nouns(self, rank_to_class):
         log_warn('Clearing ranked object dictionary')
+        for rank, obj_info in rank_to_class.items():
+            if rank in self.ranked_objs and self.robot.state == 1:
+                continue
+            self.ranked_objs[rank] = obj_info
         self.ranked_objs = rank_to_class
 
-    def assign_pcds(self, labels_to_pcds, re_seg=True):
+    def assign_pcds(self, labels_to_pcds, re_seg=False):
         '''
         labels_to_pcds (dic): {'label': [(score, pcd, obj_id/None)]}
 
@@ -133,13 +137,18 @@ class Environment:
                     }
                     self.obj_info[obj_id] = obj
 
+        print(f'Object IDs: {self.obj_info.keys()}')
+        input('continue')
+
     def intake_segmentation(self, labels_to_pcds):
         for label, infos in labels_to_pcds.items():
             for info in infos:
                 score, pcd, obj_id = info
                 if obj_id is None:
                     obj_id = len(self.obj_info)
-                self.obj_info[obj_id] = {'class': label, 'score': score, 'pcd': pcd}
+                if obj_id not in self.obj_info:
+                    self.obj_info[obj_id] = {}
+                self.obj_info[obj_id]['pcd'] = pcd
 
     def delete_sim_scene(self):
         self.robot.delete_scene(list(self.obj_info.keys()))

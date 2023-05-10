@@ -12,7 +12,6 @@ from rndf_robot.utils.real.polymetis_util import PolymetisHelper
 
 poly_util = PolymetisHelper()
 
-
 class PlanningHelper:
     def __init__(self, mc_vis, robot, gripper, 
                  ik_helper, traj_helper, tmp_obstacle_dir,

@@ -143,23 +143,40 @@ class RealRobot(Robot):
                 time.sleep(1.0)
             else:
                 self.state = 0
-                if 1 in self.ranked_objs:
-                    del self.ranked_objs[1]
 
-    def execute(self, ee_poses, place=False):
+    def find_iks(self, ee_poses, j, place):
+        colors = [16751514, 6207853, 15503192, 10264062, 14064455, 8415593, 48797, 16416176, 8785443, 16757683, 16751514]
+
         for i, ee_pose in enumerate(ee_poses):
             pose = util.body_world_yaw(util.list2pose_stamped(ee_pose), theta=0)
             pose = util.matrix_from_pose(pose)
-            util.meshcat_obj_show(self.mc_vis, self.ee_file, pose, 1.0, name=f'ee/ee_{i}')
+            util.meshcat_obj_show(self.mc_vis, self.ee_file, pose, 1.0, name=f'ee/ee_{i}_alt.{j}', color=colors[j])
 
-        jnt_poses = [self.cascade_ik(pose, place=place) for pose in ee_poses]
+        jnt_poses = []
+        for i, ee_pose in enumerate(ee_poses):
+            jnt_pose = self.cascade_ik(ee_pose, place=place)
+            if jnt_pose is None:
+                jnt_poses.append(None)
+                return jnt_poses
+            jnt_poses.append(jnt_pose)
+        return jnt_poses
 
-        start_pose = None
-        joint_traj = []
+    def execute(self, ee_poses, place=False):
+        jnt_poses = self.find_iks(ee_poses, 0, place)
+        if None in jnt_poses:
+            rotated_ee_poses = self.resample_place(util.list2pose_stamped(ee_poses[-1]))
+
+            for i in range(6):
+                jnt_poses = self.find_iks(rotated_ee_poses, i, place)
+                if None not in jnt_poses:
+                    break
+
         if None in jnt_poses:
             log_warn('Could not find IKs therefore stopping motion plan')
             return
         
+        start_pose = None
+        joint_traj = []
         for jnt_pose in jnt_poses:
             if start_pose is None:
                 resulting_traj = self.planning.plan_joint_target(joint_position_desired=jnt_pose, 
