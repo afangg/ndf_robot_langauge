@@ -1,9 +1,10 @@
 import numpy as np
 
-from .pcd_utils import pcds_from_masks, filter_pcds, extend_pcds
-from llm_robot.cameras.CameraSys import CameraSys
 from .Annotate import Annotate
-from llm_robot.utils import util, path_util
+from .SAM import SAMSeg
+from .pcd_utils import pcds_from_masks, filter_pcds, extend_pcds
+from rndf_robot.cameras.CameraSys import CameraSys
+from rndf_robot.utils import util
 
 from airobot import log_warn, log_debug
 
@@ -15,9 +16,7 @@ class VisionModule:
         self.seg_method = seg_method
 
         self.mc_vis = mc_vis
-        if seg_method != 'pb_seg':
-            from .SAM import SAMSeg
-            self.seg = SAMSeg(cuda=True)
+        self.seg = SAMSeg(cuda=True)
 
         if seg_method == 'owl':
             from .OWLViT import OWLViTDetect
