@@ -163,10 +163,9 @@ class RealRobot(Robot):
 
     def execute(self, ee_poses, place=False):
         jnt_poses = self.find_iks(ee_poses, 0, place)
-        if None in jnt_poses:
-            rotated_ee_poses = self.resample_place(util.list2pose_stamped(ee_poses[-1]))
-
+        if place and None in jnt_poses:
             for i in range(6):
+                rotated_ee_poses = self.resample_place(util.list2pose_stamped(ee_poses[-1]))
                 jnt_poses = self.find_iks(rotated_ee_poses, i, place)
                 if None not in jnt_poses:
                     break

@@ -447,9 +447,10 @@ def main(args):
 
                 if len(child_pts) > 0:
                     child_pcd = np.concatenate(child_pts, axis=0)
-                    # child_pcd =  manually_segment_pcd(child_pcd, bounds=bound, mean_inliers=False)
+                    child_pcd =  manually_segment_pcd(child_pcd, bounds=bound, mean_inliers=True)
                     # child_pcd = segment(child_pcd, top_n=1, eps=0.008, min_points=20)
                     parent_child_manager.set_child_pointcloud(child_pcd)
+                    proc_pcd = child_pcd
 
                 if len(parent_pts) > 0:
                     parent_pcd = np.concatenate(parent_pts, axis=0)
@@ -469,6 +470,7 @@ def main(args):
                 log_info('Segmenting the positive y-axis pcd to PARENT and negative y-axis pcd to CHILD')
                 parent_child_manager.set_parent_pointcloud(parent_pcd)
                 parent_child_manager.set_child_pointcloud(child_pcd)
+                proc_pcd = child_pcd
 
             log_info('Setting the active object to be the CHILD')
             parent_child_manager.set_active_object('child')

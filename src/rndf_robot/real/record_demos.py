@@ -342,7 +342,7 @@ def main(args):
             if args.instance_seg_method == 'nn':
                 from rndf_robot.segmentation.SAM import SAMSeg
 
-                sam_seg = SAMSeg()
+                sam_seg = SAMSeg(cuda=True)
             for idx, cam in enumerate(cams.cams):
                 # rgb, depth = img_subscribers[idx][1].get_rgb_and_depth(block=True)
                 rgb, depth = realsense_interface.get_rgb_and_depth_image(pipelines[idx])

@@ -28,89 +28,7 @@ from IPython import embed
 DELIM = '--rndf_weights--'
 TABLE_OBJ = {'shelf': 0, 'rack': 1}
 RELATIONS = {'on the', 'by the', 'in the'}
-DOCSTRINGS = {  
-                'grasp':  
-                    '''
-                        Skill to grasp an object conditioned on its pointcloud, its object class and 
-                        an optional argument if there's a certain geometric feature to grasp at. Skill is executed
-
-                        Args:
-                            target (target_pcds, target_class):
-                                target_pcd (np.ndarray): N x 3 array representing the 3D point cloud of the 
-                                target object to be grasped, expressed in the world coordinate system
-                                target_class (str): Class of the object to be grasped. Must be in self.obj_classes 
-                            geometry (str): Description of a geometric feature on the object to execute grasp upon
-                                ex. "handle" of a mug class object
-                        
-                        Return:
-                            new_position (Array-like, length 3): Final position of the EE, after performing the move action.
-                                If grasp fails, returns None
-                    ''',
-                'place_position': 
-                    '''
-                        Skill to place an object conditioned on its pointcloud, its object class, and 
-                            a certain geometric feature to place at. Skill is executed
-
-                        Args:
-                            target (target_pcds, target_class):
-                                target_pcd (np.ndarray): N x 3 array representing the 3D point cloud of the 
-                                target object to be placed, expressed in the world coordinate system
-                                target_class (str): Class of the object to be placed. Must be in self.obj_classes 
-                            geometry (str): Description of a geometric feature on the scene to execute place upon
-                                ex. "shelf" on the table
-                        
-                        Return:
-                            new_position (Array-like, length 3): Final position of the EE, after performing the move action.
-                                If grasp fails, returns None
-                    ''',
-                'place_relative':
-                    '''
-                        Skill to place an object relative to another relational object, and a certain geometric feature 
-                            to place at. Skill is executed
-
-                        Args:
-                            target (np.ndarray, str): N x 3 array representing the 3D point cloud of the target object 
-                                to be placed, expressed in the world coordinate system and the class of the object to be placed. 
-                                Must be in self.obj_classes 
-                            relational (np.ndarray, str): N x 3 array representing the 3D point cloud of the relational 
-                                object to be placed in relation to, expressed in the world coordinate system, and the class of 
-                                the object. Must be in self.obj_classes 
-                            geometry (str): Description of a geometric feature on the scene to execute place upon
-                                ex. "shelf" on the table or "on the bowl" of another bowl
-                        
-                        Return:
-                            new_position (Array-like, length 3): Final position of the EE, after performing the move action.
-                                If grasp fails, returns None
-                    ''',
-                'find':
-                    '''
-                        Skill to find pointclouds of object instances that match a language description
-
-                        Args:
-                            language_description (str): English language description of object to find
-                                n (optional int): Number of instances of the object to find
-                        
-                        Return:
-                            list of tuples (confidence score, pointcloud) of length n that match the language 
-                                description of the object to find. If n isn't specified, return all that match above
-                                a threshold.
-                    ''',
-                'learn_skill':
-                    '''
-                        Skill to learn a new skill from a human demonstration
-
-                        Args:
-                            skill_name (str): Short name for the skill to be learned
-                            target (np.ndarray, str): (pcd, obj_class) N x 3 array representing the 3D point cloud of 
-                                the target object that the new skill is executed on, expressed in the world coordinate 
-                                system
-                            obj_class (str): Class of the object to be executed on. Must be in self.obj_classes 
-                        
-                        Return:
-                            the function skill_name that can perform the skill given by "skil_name" and takes as input
-                                the mentioned parameters. This skill is added permanently to skill library.
-                    '''
-              }
+DOCSTRINGS = {}
 class NDFLibrary:
 
     def __init__(self, args, mc_vis, cfg, folder, obj_classes=set(), obj_models={}) -> None:
@@ -144,8 +62,6 @@ class NDFLibrary:
         #{action: {param1: set(), param2: set()}}
         self.FUNCTIONS = {'grasp': self.grasp, 'place_position': self.place_position, 'place_relative': self.place_relative}
         self.FUNCTION_PARAMS = {'grasp': ('obj_class', 'geometry'), 'place_position': ('obj_class', 'geometry'), 'place_relative': ('obj_class', 'geometry')}
-        self.PRIMITIVE_TO_
-
 
     def load_default_demos(self):
         '''
@@ -433,9 +349,9 @@ class NDFLibrary:
         qp_origin = util.transform_pcd(demo_dic['query_pts'], np.linalg.inv(origin2qp_mat)) 
         qp_placement = util.transform_pcd(qp_origin, placement_pose_mat) 
 
-        # util.meshcat_pcd_show(self.mc_vis, demo_dic['query_pts'], name='optimizer/original_qps')  
-        # util.meshcat_pcd_show(self.mc_vis, qp_origin, name='optimizer/origin_qps')  
-        # util.meshcat_pcd_show(self.mc_vis, qp_placement, name='optimizer/placement_qps')  
+        util.meshcat_pcd_show(self.mc_vis, demo_dic['query_pts'], name='optimizer/original_qps')  
+        util.meshcat_pcd_show(self.mc_vis, qp_origin, name='optimizer/origin_qps')  
+        util.meshcat_pcd_show(self.mc_vis, qp_placement, name='optimizer/placement_qps')  
 
         optimizer = self.get_optimizer(obj_class, demo_dic['query_pts'])
         optimizer.set_query_points(qp_placement)

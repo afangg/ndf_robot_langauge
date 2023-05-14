@@ -12,7 +12,7 @@ from rndf_robot.segmentation.VisionModule import VisionModule
 from rndf_robot.cameras.CameraSys import CameraSys
 
 from rndf_robot.robot.SimRobot import SimRobot
-#from rndf_robot.robot.RealRobot import RealRobot
+from rndf_robot.robot.RealRobot import RealRobot
 
 from rndf_robot.descriptions.ObjectData import OBJECT_CLASSES
 from airobot import log_debug, log_warn, log_info
@@ -219,7 +219,9 @@ def run(FUNCTIONS):
     pcd_class_pairs = zip(pcds, obj_classes)
 
     if action == 'place':
-        skill_func(*pcd_class_pairs, geometry, np.array([0.2, -0.2, 1]))
+        y = input ('what should y be')
+        z = input('What should z be')
+        skill_func(*pcd_class_pairs, geometry, np.array([0.5, float(y), float(z)]))
     else:
         skill_func(*pcd_class_pairs, geometry)
     gc.collect()

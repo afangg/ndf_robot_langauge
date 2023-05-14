@@ -12,6 +12,7 @@ class Robot:
         self.mc_vis = mc_vis
         self.cfg = cfg
         self.table_id = None
+        self.use_diff = False
 
         if self.args.gripper_type == 'panda':
             self.ee_file = osp.join(path_util.get_rndf_descriptions(), 'franka_panda/meshes/panda_hand_full.obj')
@@ -149,7 +150,7 @@ class Robot:
         if self.last_ee_pose is None:
             self.last_ee_pose = self.get_ee_pose()
         ee_poses = self.skill_library.place_position(target_pcd, target_class, geometry, position, self.last_ee_pose)
-        self.execute(ee_poses)
+        self.execute(ee_poses, place=True)
         # self.last_ee_pose = ee_poses[-1] if sucess else None
         return self.last_ee_pose
     
@@ -177,7 +178,7 @@ class Robot:
         ee_poses = self.skill_library.place_relative(target, relational, geometry, self.last_ee_pose)
         if ee_poses is None:
             return
-        self.execute(ee_poses)
+        self.execute(ee_poses, place=True)
         # self.last_ee_pose = ee_poses[-1] if sucess else None
         return self.last_ee_pose
 
